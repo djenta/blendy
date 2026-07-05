@@ -1,0 +1,64 @@
+# Local AI Chat for Blender
+
+`local_ai_chat` is a Blender 4.x add-on that adds a `Local AI` sidebar tutor.
+It reads `truth.md`, selected scene context, targeted Blender tool notes,
+optional viewport screenshots, and sends the prompt to a local
+OpenAI-compatible model server such as LM Studio.
+
+## Install
+
+1. Build or use `dist/local_ai_chat.zip`.
+2. In Blender, open `Edit > Preferences > Add-ons > Install...`.
+3. Pick `local_ai_chat.zip`, enable the add-on, then open the 3D View sidebar
+   with `N` and choose the `Local AI` tab.
+
+## Local Model Setup
+
+- Default base URL: `http://localhost:1234/v1`
+- Start LM Studio's local server before sending prompts.
+- Load a vision-capable Gemma model if you want screenshot-aware answers.
+- Use `Test Connection` in the sidebar to see which model IDs the server reports.
+- The first response can be slow while a local model wakes up.
+
+## Context Modes
+
+- `Auto`: always sends compact scene data and adds a viewport image for visual
+  prompts like "does this shape look right?"
+- `Scene Data Only`: sends Blender facts without an image to save context.
+- `Viewport Screenshot`: sends a viewport image whenever `Visual` is enabled.
+
+The context meter shows approximate text usage by prompt, `truth.md`, scene
+data, tool references, recent chat, and compacted summary. Image cost depends
+on the local vision model.
+
+## Scene Diff
+
+After each send, the add-on stores a compact internal snapshot of the scene.
+On the next send, it includes only meaningful changes such as selected object,
+dimensions, mesh counts, modifiers, materials, added objects, or removed
+objects. This keeps follow-up prompts like "done, what's next?" useful without
+re-sending a full previous scene.
+
+## Chat Display
+
+Blender sidebars do not render Markdown, so the add-on strips common Markdown
+syntax before drawing chat messages. The latest tutor answer is allowed enough
+wrapped lines to avoid cutting off mid-instruction.
+
+The main sidebar is now a compact control dock. Use `Open Chat Split` to create
+or focus a Blender Text Editor area showing the `Blender Tutor Chat` transcript.
+That transcript uses Blender's native text editor scrolling instead of trying to
+force a modern chat log into the narrow N-panel. Connection, project memory, and
+context settings open from small icon buttons below the reply box instead of
+living as permanent sections in the panel.
+
+## Project Memory
+
+Save your `.blend` file first. The add-on reads `truth.md` beside that saved
+file and can create/open it for you. It never auto-writes model suggestions into
+`truth.md`; suggested updates are shown in chat for you to copy manually.
+
+## Safety
+
+V1 is tutor-only. It does not execute Blender Python returned by the model and
+does not change objects, materials, modifiers, or scene data.

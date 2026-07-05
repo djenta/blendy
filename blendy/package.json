@@ -1,0 +1,62 @@
+{
+  "name": "blendy",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Floating Windows companion app for Blender tutoring.",
+  "main": "electron/main.cjs",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k \"vite --host 127.0.0.1 --port 5187 --strictPort\" \"wait-on http://127.0.0.1:5187 && electron .\"",
+    "build": "tsc && vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 5187 --strictPort",
+    "start": "electron .",
+    "pack": "npm run build && electron-builder --win dir",
+    "dist": "npm run build && electron-builder --win nsis"
+  },
+  "dependencies": {
+    "geist": "^1.7.2",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.0",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3",
+    "wait-on": "^8.0.1"
+  },
+  "build": {
+    "appId": "dev.blendy.app",
+    "productName": "Blendy",
+    "files": [
+      "dist/**/*",
+      "build/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/icon.ico",
+        "to": "build/icon.ico"
+      }
+    ],
+    "directories": {
+      "buildResources": "build",
+      "output": "release"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+
+# JavaScript dependencies
+node_modules/
+
+# Local env/secrets
+.env
+.env.*
+!.env.example
+
+# Generated builds and packaged apps
+dist/
+blendy/build/
+blendy/dist/
+blendy/release*/
+blendy/out/
+
+# Local QA screenshots and logs
+blendy/qa/
+*.log
