@@ -23,6 +23,11 @@ blendy/dist/
 blendy/release*/
 blendy/out/
 
+# Local Blender projects and per-project Blendy memory
+*.blend
+*.blend1
+truth.md
+
 # Local QA screenshots and logs
 blendy/qa/
 *.log

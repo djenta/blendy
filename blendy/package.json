@@ -1,6 +1,6 @@
 {
   "name": "blendy",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Local AI Tutor for Blender.",
   "main": "electron/main.cjs",
@@ -31,7 +31,7 @@
     "wait-on": "^8.0.1"
   },
   "build": {
-    "appId": "dev.blendy.app",
+    "appId": "app.blendy.local-ai-tutor",
     "productName": "Blendy",
     "artifactName": "Blendy Local AI Tutor Setup ${version}.${ext}",
     "files": [
@@ -70,12 +70,14 @@
     "nsis": {
       "oneClick": false,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
+      "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Blendy",
       "uninstallDisplayName": "Blendy Local AI Tutor",
       "include": "build/installer.nsh"
     }
-  }
+  },
+  "author": "Blendy contributors",
+  "license": "MIT"
 }
