@@ -6,12 +6,22 @@ context, and does not execute model-written Blender Python.
 
 ## Download
 
-[![Download Blendy 1.0.2 for Windows](https://img.shields.io/badge/Download-Blendy%201.0.2%20for%20Windows-2ea44f?style=for-the-badge&logo=windows)](https://github.com/djenta/blendy/releases/latest)
+[![Download Blendy 1.0.3 for Windows](https://img.shields.io/badge/Download-Blendy%201.0.3%20for%20Windows-2ea44f?style=for-the-badge&logo=windows)](https://github.com/djenta/blendy/releases/latest)
+
+<p>
+  <a href="docs/screenshots/blendy-promo-1.png"><img src="docs/screenshots/blendy-promo-1.png" alt="Blendy reading a Blender scene and answering in the desktop tutor app" width="100%"></a>
+</p>
+<p>
+  <a href="docs/screenshots/blendy-promo-2.png"><img src="docs/screenshots/blendy-promo-2.png" alt="Blendy suggesting a faster curve workflow for a cable model in Blender" width="100%"></a>
+</p>
+<p>
+  <a href="docs/screenshots/blendy-promo-3.png"><img src="docs/screenshots/blendy-promo-3.png" alt="Blendy receipt showing the troubleshooting and workflow shortcuts used" width="100%"></a>
+</p>
 
 Download the Windows installer from the latest GitHub Release:
 
 ```text
-Blendy-Local-AI-Tutor-Setup-1.0.2.exe
+Blendy-Local-AI-Tutor-Setup-1.0.3.exe
 ```
 
 ## What You Need
@@ -29,7 +39,7 @@ http://localhost:1234/v1
 
 ## Install On Windows
 
-1. Download `Blendy-Local-AI-Tutor-Setup-1.0.2.exe`.
+1. Download `Blendy-Local-AI-Tutor-Setup-1.0.3.exe`.
 2. Run the installer.
 3. Open Blender.
 4. In the 3D View, press `N` to open the right sidebar.

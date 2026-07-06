@@ -12,6 +12,10 @@ if (!singleInstanceLock) {
   app.quit();
 }
 
+if (process.platform === "win32") {
+  app.setAppUserModelId("app.blendy.local-ai-tutor");
+}
+
 function appIconPath() {
   const candidates = [
     path.join(process.resourcesPath || "", "build/icon.ico"),
