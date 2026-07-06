@@ -18,6 +18,17 @@ class CoreTests(unittest.TestCase):
             "http://localhost:1234/v1/chat/completions",
         )
 
+    def test_default_model_is_auto_for_loaded_lm_studio_model(self) -> None:
+        payload = core.build_chat_payload(
+            model_name="",
+            prompt="What should I do next?",
+            truth_md="",
+            scene_context="Active object: Cube",
+        )
+
+        self.assertEqual(core.DEFAULT_MODEL_NAME, "auto")
+        self.assertEqual(payload["model"], "auto")
+
     def test_build_text_only_payload_uses_string_user_content(self) -> None:
         payload = core.build_chat_payload(
             model_name="gemma-test",

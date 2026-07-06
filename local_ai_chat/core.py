@@ -22,10 +22,7 @@ from typing import Any
 
 
 DEFAULT_BACKEND_BASE_URL = "http://localhost:1234/v1"
-DEFAULT_MODEL_NAME = (
-    "lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF/"
-    "gemma-4-26B-A4B-it-QAT-Q4_0.gguf"
-)
+DEFAULT_MODEL_NAME = "auto"
 DEFAULT_CONTEXT_LIMIT_TOKENS = 70000
 DEFAULT_RESPONSE_MAX_TOKENS = 8000
 DEFAULT_COMPACTION_MAX_TOKENS = 1200
@@ -671,6 +668,10 @@ def normalize_base_url(base_url: str) -> str:
 
 def endpoint_url(base_url: str, path: str) -> str:
     return f"{normalize_base_url(base_url)}/{path.lstrip('/')}"
+
+
+def is_auto_model_name(model_name: str) -> bool:
+    return not (model_name or "").strip() or (model_name or "").strip().lower() == "auto"
 
 
 def truth_file_path(blend_filepath: str | Path) -> Path | None:
@@ -2968,6 +2969,9 @@ def post_chat_completion(
     payload: dict[str, Any],
     timeout: int = 180,
 ) -> str:
+    payload = dict(payload)
+    if is_auto_model_name(str(payload.get("model", ""))):
+        payload["model"] = resolve_model_name(base_url, str(payload.get("model", "")), timeout=min(timeout, 20))
     url = endpoint_url(base_url, "/chat/completions")
     body = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
@@ -2990,6 +2994,15 @@ def post_chat_completion(
     except TimeoutError as exc:
         raise RuntimeError("The local model server timed out before answering.") from exc
     return parse_chat_response(data)
+
+
+def resolve_model_name(base_url: str, model_name: str, timeout: int = 20) -> str:
+    if not is_auto_model_name(model_name):
+        return model_name.strip()
+    models = list_models(base_url, timeout=timeout)
+    if not models:
+        raise RuntimeError("LM Studio is reachable, but /v1/models returned no loaded models.")
+    return models[0]
 
 
 def list_models(base_url: str, timeout: int = 20) -> list[str]:

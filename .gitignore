@@ -3,7 +3,7 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-build/
+/build/
 
 # JavaScript dependencies
 node_modules/
@@ -15,7 +15,10 @@ node_modules/
 
 # Generated builds and packaged apps
 dist/
-blendy/build/
+blendy/build/*
+!blendy/build/icon.ico
+!blendy/build/install-blender-addon.ps1
+!blendy/build/installer.nsh
 blendy/dist/
 blendy/release*/
 blendy/out/

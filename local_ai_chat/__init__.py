@@ -22,7 +22,7 @@ bl_info = {
     "version": (0, 4, 1),
     "blender": (4, 0, 0),
     "location": "View3D > Sidebar > Local AI",
-    "description": "Project-aware local AI tutor for Blender using OpenAI-compatible local models.",
+    "description": "Project-aware local AI tutor for Blender using LM Studio.",
     "category": "3D View",
 }
 
@@ -87,13 +87,16 @@ def _threaded_model_list(scene_name: str, base_url: str, current_model: str) -> 
         if not models:
             text = "Connected, but /v1/models returned no loaded models."
             status = "WARN"
+        elif core.is_auto_model_name(current_model):
+            text = f"Connected. Auto will use the first loaded LM Studio model: {models[0]}."
+            status = "OK"
         elif current_model and current_model in models:
             text = f"Connected. Model is available: {current_model}. First answer may be slow while it wakes up."
             status = "OK"
         else:
             joined = ", ".join(models[:4])
             extra = "" if len(models) <= 4 else f" (+{len(models) - 4} more)"
-            text = f"Connected. Loaded model IDs: {joined}{extra}. Update Model if this is not the one you want."
+            text = f"Connected. Loaded model IDs: {joined}{extra}. Use auto or paste one of these IDs."
             status = "WARN"
         _RESULT_QUEUE.put(
             {
@@ -336,12 +339,12 @@ if bpy is not None:
         backend_base_url: StringProperty(
             name="Base URL",
             default=core.DEFAULT_BACKEND_BASE_URL,
-            description="OpenAI-compatible local endpoint, usually LM Studio",
+            description="LM Studio local server endpoint",
         )
         model_name: StringProperty(
             name="Model",
             default=core.DEFAULT_MODEL_NAME,
-            description="Loaded local model identifier",
+            description="Use auto for the first loaded LM Studio model, or paste a loaded model ID",
         )
         prompt: StringProperty(
             name="Prompt",
@@ -1428,7 +1431,7 @@ if bpy is not None:
     class LOCALAI_OT_TestConnection(Operator):
         bl_idname = "local_ai_chat.test_connection"
         bl_label = "Test Connection"
-        bl_description = "Check the local OpenAI-compatible model server"
+        bl_description = "Check the LM Studio local server"
 
         def execute(self, context: Any) -> set[str]:
             props = context.scene.local_ai_chat

@@ -51,6 +51,10 @@ const defaultBackendSettings: BackendSettings = {
   knowledgeMode: "LOCAL_AUTO_WEB",
 };
 
+const CONTEXT_LIMIT_MIN_TOKENS = 10000;
+const CONTEXT_LIMIT_MAX_TOKENS = 256000;
+const CONTEXT_LIMIT_STEP_TOKENS = 1000;
+
 const themeLabels: Record<ThemeName, string> = {
   solar: "Scholastic Solar",
   sprint: "Neon Sprint",
@@ -85,6 +89,13 @@ function formatTokens(value: number): string {
     return `${rounded}k`;
   }
   return String(Math.round(value));
+}
+
+function clampContextLimit(value: number): number {
+  if (!Number.isFinite(value)) {
+    return defaultBackendSettings.contextLimitTokens;
+  }
+  return Math.min(CONTEXT_LIMIT_MAX_TOKENS, Math.max(CONTEXT_LIMIT_MIN_TOKENS, Math.round(value)));
 }
 
 function contextButtonLabel(contextSnapshot: ContextSnapshot): string {
@@ -1228,6 +1239,7 @@ function SettingsPage({
         <label className="text-setting">
           <span>Model</span>
           <input
+            placeholder="auto"
             value={backendSettings.model}
             onChange={(event) => updateBackendSettings({ model: event.target.value || "auto" })}
           />
@@ -1241,6 +1253,18 @@ function SettingsPage({
             step="256"
             value={backendSettings.responseMaxTokens}
             onChange={(event) => updateBackendSettings({ responseMaxTokens: Number(event.target.value) })}
+          />
+        </label>
+        <label className="range-setting">
+          <span>Context limit</span>
+          <strong>{formatTokens(clampContextLimit(backendSettings.contextLimitTokens))}</strong>
+          <input
+            type="range"
+            min={CONTEXT_LIMIT_MIN_TOKENS}
+            max={CONTEXT_LIMIT_MAX_TOKENS}
+            step={CONTEXT_LIMIT_STEP_TOKENS}
+            value={clampContextLimit(backendSettings.contextLimitTokens)}
+            onChange={(event) => updateBackendSettings({ contextLimitTokens: Number(event.target.value) })}
           />
         </label>
       </SettingsGroup>

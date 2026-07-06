@@ -3,20 +3,40 @@
 `local_ai_chat` is a Blender 4.x add-on that adds a `Local AI` sidebar tutor.
 It reads `truth.md`, selected scene context, targeted Blender tool notes,
 optional viewport screenshots, and sends the prompt to a local
-OpenAI-compatible model server such as LM Studio.
+LM Studio local server.
 
 ## Install
 
-1. Build or use `dist/local_ai_chat.zip`.
-2. In Blender, open `Edit > Preferences > Add-ons > Install...`.
-3. Pick `local_ai_chat.zip`, enable the add-on, then open the 3D View sidebar
-   with `N` and choose the `Local AI` tab.
+### Windows Installer
+
+1. Download `Blendy Local AI Tutor Setup`.
+2. Run the installer.
+3. Open Blendy from the desktop or Start Menu shortcut.
+4. Open Blender, then use the 3D View sidebar with `N` and choose the
+   `Local AI` tab.
+
+The Windows installer bundles the Blender add-on and tries to install it for
+every Blender version it can find for the current Windows user. If it can find
+`blender.exe`, it also asks Blender to enable the add-on and save that
+preference.
+
+If Blender is installed after Blendy, run the Blendy installer again so it can
+copy the add-on into the new Blender version folder.
+
+### Manual Add-on Install
+
+If you only want the Blender add-on, build or use `dist/local_ai_chat.zip`, then
+in Blender open `Edit > Preferences > Add-ons > Install...`, pick
+`local_ai_chat.zip`, enable the add-on, open the 3D View sidebar with `N`, and
+choose the `Local AI` tab.
 
 ## Local Model Setup
 
 - Default base URL: `http://localhost:1234/v1`
 - Start LM Studio's local server before sending prompts.
-- Load a vision-capable Gemma model if you want screenshot-aware answers.
+- Load any LM Studio model you want to use. Blendy defaults to `auto`, which
+  asks LM Studio for `/v1/models` and uses the first loaded model ID.
+- Use a vision-capable model if you want screenshot-aware answers.
 - Use `Test Connection` in the sidebar to see which model IDs the server reports.
 - The first response can be slow while a local model wakes up.
 

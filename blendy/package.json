@@ -2,7 +2,7 @@
   "name": "blendy",
   "version": "0.1.0",
   "private": true,
-  "description": "Floating Windows companion app for Blender tutoring.",
+  "description": "Local AI Tutor for Blender.",
   "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
@@ -33,6 +33,7 @@
   "build": {
     "appId": "dev.blendy.app",
     "productName": "Blendy",
+    "artifactName": "Blendy Local AI Tutor Setup ${version}.${ext}",
     "files": [
       "dist/**/*",
       "build/**/*",
@@ -43,6 +44,19 @@
       {
         "from": "build/icon.ico",
         "to": "build/icon.ico"
+      },
+      {
+        "from": "../local_ai_chat",
+        "to": "blender-addons/local_ai_chat",
+        "filter": [
+          "**/*",
+          "!__pycache__/**",
+          "!*.pyc"
+        ]
+      },
+      {
+        "from": "build/install-blender-addon.ps1",
+        "to": "installer/install-blender-addon.ps1"
       }
     ],
     "directories": {
@@ -56,7 +70,12 @@
     "nsis": {
       "oneClick": false,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Blendy",
+      "uninstallDisplayName": "Blendy Local AI Tutor",
+      "include": "build/installer.nsh"
     }
   }
 }
