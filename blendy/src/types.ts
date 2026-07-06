@@ -40,6 +40,7 @@ export interface AssistantReceipt {
     reasons?: string[];
     betterMove?: string;
     diagnosisOrder?: string;
+    plainSummary?: string;
     sources?: Array<{
       title: string;
       url: string;

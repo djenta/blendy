@@ -1003,6 +1003,37 @@ function MessageRow({ message, isLatestAssistant, onRegenerate, onReceiptClick, 
   );
 }
 
+function cleanReceiptText(value?: string) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .replace(/\s*;\s*/g, "; ")
+    .trim()
+    .replace(/[.?!]+$/g, "");
+}
+
+function receiptCardLabel(type?: string) {
+  if (type === "workflow_shortcut") return "Workflow shortcut";
+  if (type === "troubleshooting") return "Troubleshooting card";
+  return "Reference card";
+}
+
+function summarizeReceiptCard(card: NonNullable<AssistantReceipt["cards"]>[number]) {
+  if (card.plainSummary) return card.plainSummary;
+  const betterMove = cleanReceiptText(card.betterMove);
+  const diagnosisOrder = cleanReceiptText(card.diagnosisOrder);
+  const reason = cleanReceiptText((card.reasons || [])[0]);
+  const title = cleanReceiptText(card.title || "selected card");
+  const plainPoint = betterMove || diagnosisOrder || reason || title;
+
+  if (card.type === "workflow_shortcut") {
+    return `Blendy used a workflow shortcut: ${plainPoint}.`;
+  }
+  if (card.type === "troubleshooting") {
+    return `Blendy used a troubleshooting card: ${plainPoint}.`;
+  }
+  return `Blendy used this reference because it matched the situation: ${plainPoint}.`;
+}
+
 function ReceiptDetails({
   message,
   receipt,
@@ -1013,10 +1044,9 @@ function ReceiptDetails({
   onClose: () => void;
 }) {
   const cards = receipt.cards || [];
-  const sources = receipt.web?.sources || [];
-  const urls = receipt.web?.urls || [];
   const usedQueries = receipt.web?.usedQueries || [];
   const attemptedQueries = receipt.web?.queries || [];
+  const webQuery = usedQueries[0] || attemptedQueries[0] || "";
   return (
     <div className="receipt-backdrop" role="presentation" onMouseDown={onClose}>
       <section className="receipt-panel" role="dialog" aria-modal="true" aria-label="Blendy receipt" onMouseDown={(event) => event.stopPropagation()}>
@@ -1032,52 +1062,31 @@ function ReceiptDetails({
 
         {cards.length > 0 && (
           <section className="receipt-section">
-            <h3>Cards</h3>
+            <h3>What Blendy Used</h3>
             {cards.map((card) => (
               <article className="receipt-card" key={card.id || card.title}>
                 <div>
-                  <strong>{card.title}</strong>
-                  <span>{[card.type, card.sourceQuality, card.score ? `${card.score}` : ""].filter(Boolean).join(" · ")}</span>
+                  <strong>{receiptCardLabel(card.type)}</strong>
+                  {card.title && <span>{card.title}</span>}
                 </div>
-                {(card.reasons || []).slice(0, 3).map((reason) => (
-                  <p key={reason}>{reason}</p>
-                ))}
-                {card.betterMove && <p>{card.betterMove}</p>}
-                {card.diagnosisOrder && <p>{card.diagnosisOrder}</p>}
-                {(card.matchedChecks || []).length > 0 && <small>Checks: {(card.matchedChecks || []).join(", ")}</small>}
-                {(card.sources || []).slice(0, 3).map((source) => (
-                  source.url ? (
-                    <a className="receipt-source compact" key={source.url} href={source.url} target="_blank" rel="noreferrer">
-                      <strong>{source.title || source.url}</strong>
-                      <span>{[source.sourceType, source.quality].filter(Boolean).join(" · ")}</span>
-                    </a>
-                  ) : null
-                ))}
+                <p>{summarizeReceiptCard(card)}</p>
               </article>
             ))}
           </section>
         )}
 
-        {(receipt.web?.status || sources.length > 0 || urls.length > 0 || attemptedQueries.length > 0) && (
+        {(receipt.web?.status || webQuery) && (
           <section className="receipt-section">
-            <h3>Web Search</h3>
-            {receipt.web?.status && <p className="receipt-status">{receipt.web.status}</p>}
-            {usedQueries.length > 0 && <p className="receipt-status">Used query: {usedQueries.join(" | ")}</p>}
-            {!usedQueries.length && attemptedQueries.length > 0 && <p className="receipt-status">Tried query: {attemptedQueries.join(" | ")}</p>}
-            {sources.slice(0, 5).map((source) => (
-              <a className="receipt-source" key={source.url} href={source.url} target="_blank" rel="noreferrer">
-                <strong>{source.title || source.url}</strong>
-                <span>{[source.authority, source.confidence ? `${Math.round(source.confidence * 100)}%` : ""].filter(Boolean).join(" · ")}</span>
-                {source.searchQuery && <small>Query: {source.searchQuery}</small>}
-                {source.summary && <p>{source.summary}</p>}
-                <small>{source.url}</small>
-              </a>
-            ))}
-            {!sources.length && urls.slice(0, 5).map((url) => <p className="receipt-status" key={url}>{url}</p>)}
+            <h3>Web Check</h3>
+            {webQuery ? (
+              <p className="receipt-status">Blendy checked web results for: {webQuery}</p>
+            ) : (
+              <p className="receipt-status">{receipt.web?.status}</p>
+            )}
           </section>
         )}
 
-        {!cards.length && !receipt.web?.status && !sources.length && !urls.length && (
+        {!cards.length && !receipt.web?.status && !webQuery && (
           <p className="receipt-empty">No detailed receipt data was stored for this message.</p>
         )}
       </section>

@@ -195,6 +195,7 @@ const receipt = assistantReceipt({
 assert(receipt.line.includes("Web Search"));
 assert(!receipt.line.includes("Bevel Modifier Appears to Do Nothing"));
 assert.strictEqual(receipt.details.cards[0].title, "Bevel Modifier Appears to Do Nothing");
+assert.strictEqual(receipt.details.cards[0].plainSummary, "Blendy used a troubleshooting card: Check scale before judging the bevel.");
 assert.strictEqual(receipt.details.cards[0].betterMove, "Check scale before judging the bevel.");
 assert.strictEqual(receipt.details.cards[0].sources[0].title, "Bevel Manual");
 assert.deepStrictEqual(receipt.details.web.usedQueries, ["bevel modifier does nothing"]);

@@ -1064,7 +1064,7 @@
       "diagnosis_order": "",
       "what_blendy_should_say": "",
       "what_blendy_should_avoid": "",
-      "notes": "Blendy can calculate 360/count for Frank.",
+      "notes": "Blendy can calculate 360/count for USER.",
       "sources": [
         {
           "title": "Blender StackExchange: Radial Array object offset problem",

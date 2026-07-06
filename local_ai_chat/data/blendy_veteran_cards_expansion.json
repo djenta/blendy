@@ -17,7 +17,7 @@
       "not_use": "Flat color or purely procedural materials where UV seams do not matter.",
       "diagnosis": "Check UV map, seam placement, unwrap result, then material texture coordinates.",
       "say": "UV seams are planned cut lines for a flat texture, so hide the cut where the viewer will not see it.",
-      "avoid": "Do not tell Frank to repaint the texture before checking seams and unwrap.",
+      "avoid": "Do not tell USER to repaint the texture before checking seams and unwrap.",
       "sources": [
         {"title": "Blender Manual: Seams", "url": "https://docs.blender.org/manual/en/latest/modeling/meshes/uv/unwrapping/seams.html", "host": "docs.blender.org", "source_type": "official", "quality": "official"}
       ],
@@ -85,7 +85,7 @@
       "not_use": "Curved labels, game/export assets where separate planes cause issues, or z-fighting surfaces.",
       "diagnosis": "Check plane position, aspect ratio, alpha, and camera angle.",
       "say": "For a flat logo, use the image like a thin sticker first.",
-      "avoid": "Do not recommend carving the logo into geometry unless Frank needs real physical depth.",
+      "avoid": "Do not recommend carving the logo into geometry unless USER needs real physical depth.",
       "sources": [
         {"title": "Blender Manual: Import Images as Planes", "url": "https://docs.blender.org/manual/en/latest/modeling/meshes/import_images_as_planes.html", "host": "docs.blender.org", "source_type": "official", "quality": "official"}
       ],
@@ -133,7 +133,7 @@
       "not_use": "Exact logo placement, where UV editing is usually clearer.",
       "diagnosis": "Check coordinate source, mapping values, object scale, then UV map.",
       "say": "Change the texture mapping, not the product dimensions.",
-      "avoid": "Do not tell Frank to resize the object when only the pattern is wrong.",
+      "avoid": "Do not tell USER to resize the object when only the pattern is wrong.",
       "sources": [
         {"title": "Blender Manual: Mapping Node", "url": "https://docs.blender.org/manual/en/latest/render/shader_nodes/utilities/vector/mapping.html", "host": "docs.blender.org", "source_type": "official", "quality": "official"}
       ],
@@ -271,7 +271,7 @@
       "not_use": "Organic sculpting or snapping-to-surface tasks.",
       "diagnosis": "Check units, axis/orientation, transform values, and whether snapping would be better.",
       "say": "For product work, typed transforms beat eyeballing.",
-      "avoid": "Do not ask Frank to manually nudge exact mechanical offsets.",
+      "avoid": "Do not ask USER to manually nudge exact mechanical offsets.",
       "sources": [
         {"title": "Blender Manual: Numeric Input", "url": "https://docs.blender.org/manual/en/latest/scene_layout/object/editing/transform/control/numeric_input.html", "host": "docs.blender.org", "source_type": "official", "quality": "official"}
       ],
@@ -317,7 +317,7 @@
       "not_use": "Flat solid materials with no texture coordinates involved.",
       "diagnosis": "Check scale, active UV map, seams, unwrap, UV island proportions, then shader coordinates.",
       "say": "A stretched texture is usually a UV/scale/coordinate problem, not a lighting problem.",
-      "avoid": "Do not tell Frank to repaint the texture first.",
+      "avoid": "Do not tell USER to repaint the texture first.",
       "sources": [
         {"title": "Blender Manual: UV Seams", "url": "https://docs.blender.org/manual/en/latest/modeling/meshes/uv/unwrapping/seams.html", "host": "docs.blender.org", "source_type": "official", "quality": "official"}
       ],
@@ -410,7 +410,7 @@
       "not_use": "Actual holes that need geometry thickness.",
       "diagnosis": "Check image alpha, node wiring, material settings, engine, and shadow mode.",
       "say": "The alpha channel needs to be wired and the material must allow transparency.",
-      "avoid": "Do not tell Frank to delete the plane before testing alpha.",
+      "avoid": "Do not tell USER to delete the plane before testing alpha.",
       "sources": [
         {"title": "Blender Manual: Transparent BSDF", "url": "https://docs.blender.org/manual/en/latest/render/shader_nodes/shader/transparent.html", "host": "docs.blender.org", "source_type": "official", "quality": "official"}
       ],
@@ -482,7 +482,7 @@
       "not_use": "Hidden collections or disabled render visibility.",
       "diagnosis": "Check viewport/camera clipping, scene scale, and camera position.",
       "say": "This can be a view/camera clipping range problem, not a destroyed mesh.",
-      "avoid": "Do not tell Frank to rebuild the mesh before checking clipping.",
+      "avoid": "Do not tell USER to rebuild the mesh before checking clipping.",
       "sources": [
         {"title": "Blender Manual: Cameras", "url": "https://docs.blender.org/manual/en/latest/render/cameras.html", "host": "docs.blender.org", "source_type": "official", "quality": "official"}
       ],
@@ -599,7 +599,7 @@
       "not_use": "Ordinary duplicated mesh objects.",
       "diagnosis": "Check instance nodes, Realize Instances placement, material assignment, and export needs.",
       "say": "Instances are not normal editable mesh until you realize/apply them.",
-      "avoid": "Do not tell Frank to apply without explaining it makes generated geometry real.",
+      "avoid": "Do not tell USER to apply without explaining it makes generated geometry real.",
       "sources": [
         {"title": "Blender Manual: Realize Instances", "url": "https://docs.blender.org/manual/en/latest/modeling/geometry_nodes/instances/realize_instances.html", "host": "docs.blender.org", "source_type": "official", "quality": "official"}
       ],

@@ -146,7 +146,7 @@ VISUAL_PROMPT_KEYWORDS = (
     "is this",
 )
 
-SYSTEM_PROMPT = """You are Blendy, a vibe-coded local Blender tutor Frank made because he keeps bouncing off Blender and wants guidance and persistence. You live inside the user's local Blender workflow.
+SYSTEM_PROMPT = """You are Blendy, a local Blender tutor for beginner artists who want clear guidance and persistence. You live inside the user's local Blender workflow.
 
 Primary user workflow:
 - The user is a complete Blender beginner with strong product/design thinking.
@@ -1760,14 +1760,12 @@ def _is_probably_blender_question(prompt: str, scene_context: str = "") -> bool:
     )
     non_blender_markers = (
         "actor",
-        "actress",
         "who is",
         "who's",
         "person",
         "profile",
+        "public figure",
         "social media",
-        "female",
-        "woman",
         "male",
         "man",
         "musician",
@@ -1809,7 +1807,6 @@ def is_explicit_web_lookup_request(prompt: str) -> bool:
             "look online",
             "look it up",
             "look this up",
-            "look her up",
             "look him up",
             "look them up",
             "search online",
@@ -1852,15 +1849,12 @@ def _is_person_lookup(prompt: str) -> bool:
         phrase in lower
         for phrase in (
             "who is",
-            "actress",
             "actor",
             "profile",
             "person",
-            "female",
-            "woman",
+            "public figure",
             "male",
             "man",
-            "look her up",
             "look him up",
             "look them up",
         )
@@ -1883,7 +1877,7 @@ def _web_search_queries(prompt: str, *, blender_question: bool) -> list[str]:
 
     if _is_person_lookup(prompt):
         entity = re.sub(
-            r"\b(actor|actress|person|profile|bio|biography|public figure|female|woman|male|man|girl|guy|who|is|she|he|they|it)\b",
+            r"\b(actor|person|profile|bio|biography|public figure|male|man|who|is|she|he|they|it)\b",
             " ",
             base,
             flags=re.IGNORECASE,
@@ -2211,7 +2205,7 @@ def build_read_only_verification_notes(
     ):
         lines.append("Startup/defaults check: this is about future new files, not just current Scene Properties units.")
     if knowledge_mode == KNOWLEDGE_MODE_ASK_BEFORE_WEB and not online:
-        lines.append("Ask Before Web is active: if local refs are not enough, ask Frank before online lookup.")
+        lines.append("Ask Before Web is active: if local refs are not enough, ask the user before online lookup.")
     if web_status:
         lines.append(web_status)
     if not refs and not online:

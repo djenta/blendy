@@ -18,7 +18,7 @@ from . import core
 
 bl_info = {
     "name": "Local AI Chat",
-    "author": "Frank + Codex",
+    "author": "Blendy contributors",
     "version": (0, 4, 1),
     "blender": (4, 0, 0),
     "location": "View3D > Sidebar > Local AI",

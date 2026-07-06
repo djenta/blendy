@@ -61,12 +61,12 @@ const VISUAL_PROMPT_KEYWORDS = [
   "is this",
 ];
 
-const SYSTEM_PROMPT = `You are Blendy, a vibe-coded local Blender tutor Frank made because he keeps bouncing off Blender and wants guidance and persistence. You live inside the user's local Blender workflow.
+const SYSTEM_PROMPT = `You are Blendy, a local Blender tutor for beginner artists who want clear guidance and persistence. You live inside the user's local Blender workflow.
 
 Primary user workflow:
 - The user is a complete Blender beginner with strong product/design thinking.
 - Your job is to prevent overwhelm by turning the current scene into the next small, doable Blender action.
-- Keep Frank moving through one clear checkpoint at a time.
+- Keep the user moving through one clear checkpoint at a time.
 
 Truth ladder:
 - The user's latest prompt is the task. Project Brief and scene context are background unless they directly answer that task.
@@ -367,6 +367,30 @@ function contextToSnapshot(context, userDataPath, usage = null, promptPacketFile
   };
 }
 
+function cleanReceiptSentence(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .replace(/\s*;\s*/g, "; ")
+    .trim()
+    .replace(/[.?!]+$/g, "");
+}
+
+function plainCardSummary(card) {
+  const title = cleanReceiptSentence(card.title || card.id || "selected card");
+  const betterMove = cleanReceiptSentence(card.betterMove);
+  const diagnosisOrder = cleanReceiptSentence(card.diagnosisOrder);
+  const reason = cleanReceiptSentence(Array.isArray(card.reasons) ? card.reasons[0] : "");
+  const plainPoint = betterMove || diagnosisOrder || reason || title;
+
+  if (card.type === "workflow_shortcut") {
+    return `Blendy used a workflow shortcut: ${plainPoint}.`;
+  }
+  if (card.type === "troubleshooting") {
+    return `Blendy used a troubleshooting card: ${plainPoint}.`;
+  }
+  return `Blendy used this reference because it matched the situation: ${plainPoint}.`;
+}
+
 function assistantContextLine(context) {
   return assistantReceipt(context).line;
 }
@@ -429,6 +453,9 @@ function assistantReceipt(context) {
     betterMove: card.betterMove || "",
     diagnosisOrder: card.diagnosisOrder || "",
     sources: Array.isArray(card.sources) ? card.sources : [],
+  })).map((card) => ({
+    ...card,
+    plainSummary: plainCardSummary(card),
   }));
   const webSources = knowledgeSources
     .filter((source) => source && source.url)

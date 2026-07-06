@@ -115,7 +115,7 @@ class CoreTests(unittest.TestCase):
 
     def test_system_prompt_requires_functional_tool_steps(self) -> None:
         self.assertIn("You are Blendy", core.SYSTEM_PROMPT)
-        self.assertIn("vibe-coded local Blender tutor Frank made", core.SYSTEM_PROMPT)
+        self.assertIn("local Blender tutor for beginner artists", core.SYSTEM_PROMPT)
         self.assertIn("Truth ladder", core.SYSTEM_PROMPT)
         self.assertIn("The user's latest prompt is the task", core.SYSTEM_PROMPT)
         self.assertIn("Trust live Blender runtime facts and screenshot evidence first", core.SYSTEM_PROMPT)
@@ -414,7 +414,7 @@ class CoreTests(unittest.TestCase):
         )
 
         self.assertIn("Ask Before Web", knowledge["web_references"])
-        self.assertIn("ask Frank before online lookup", knowledge["verification_notes"])
+        self.assertIn("ask the user before online lookup", knowledge["verification_notes"])
 
     def test_ask_before_web_runs_when_user_explicitly_approves_lookup(self) -> None:
         seen: list[str] = []
@@ -447,14 +447,14 @@ class CoreTests(unittest.TestCase):
             seen_queries.append(query)
             return [
                 {
-                    "title": "Pristine Edge workflow note",
-                    "url": "https://example.com/pristine-edge-workflow",
-                    "snippet": "A searched source mentions a pristine edge workflow for product modeling.",
+                    "title": "Sample Edge workflow note",
+                    "url": "https://example.com/sample-edge-workflow",
+                    "snippet": "A searched source mentions a sample edge workflow for product modeling.",
                 }
             ]
 
         knowledge = core.retrieve_knowledge(
-            prompt="do a web search on pristine edge",
+            prompt="do a web search on sample edge",
             scene_context="Cube selected in Object Mode",
             runtime_facts="Blender version: 5.0.1",
             knowledge_mode=core.KNOWLEDGE_MODE_LOCAL_AUTO_WEB,
@@ -462,9 +462,9 @@ class CoreTests(unittest.TestCase):
             allow_default_web=True,
         )
 
-        self.assertEqual(seen_queries, ["pristine edge"])
+        self.assertEqual(seen_queries, ["sample edge"])
         self.assertNotIn("Web lookup not needed", knowledge["web_references"])
-        self.assertIn("https://example.com/pristine-edge-workflow", knowledge["web_references"])
+        self.assertIn("https://example.com/sample-edge-workflow", knowledge["web_references"])
         self.assertIn("general web search result", knowledge["web_references"])
 
     def test_non_blender_question_skips_blender_docs_and_searches_topic(self) -> None:
@@ -474,14 +474,14 @@ class CoreTests(unittest.TestCase):
             seen_queries.append(query)
             return [
                 {
-                    "title": "Pristine Edge biography",
-                    "url": "https://example.com/pristine-edge-actress",
-                    "snippet": "Pristine Edge is an actress biography result from a broad web search.",
+                    "title": "Sample Edge profile",
+                    "url": "https://example.com/sample-edge-profile",
+                    "snippet": "Sample Edge is a public figure profile result from a broad web search.",
                 }
             ]
 
         knowledge = core.retrieve_knowledge(
-            prompt="who is Pristine Edge the actress?",
+            prompt="who is Sample Edge the public figure?",
             scene_context="Cube selected in Object Mode",
             runtime_facts="Blender version: 5.0.1",
             knowledge_mode=core.KNOWLEDGE_MODE_LOCAL_AUTO_WEB,
@@ -489,9 +489,9 @@ class CoreTests(unittest.TestCase):
             allow_default_web=True,
         )
 
-        self.assertEqual(seen_queries, ["Pristine Edge"])
+        self.assertEqual(seen_queries, ["Sample Edge"])
         self.assertIn("no local official docs matched", knowledge["knowledge_references"])
-        self.assertIn("https://example.com/pristine-edge-actress", knowledge["web_references"])
+        self.assertIn("https://example.com/sample-edge-profile", knowledge["web_references"])
 
     def test_non_blender_lookup_ignores_active_scene_context(self) -> None:
         seen_queries: list[str] = []
@@ -500,14 +500,14 @@ class CoreTests(unittest.TestCase):
             seen_queries.append(query)
             return [
                 {
-                    "title": "Pristine Edge profile",
-                    "url": "https://example.com/pristine-edge",
-                    "snippet": "Pristine Edge is a public figure profile result.",
+                    "title": "Sample Edge profile",
+                    "url": "https://example.com/sample-edge",
+                    "snippet": "Sample Edge is a public figure profile result.",
                 }
             ]
 
         knowledge = core.retrieve_knowledge(
-            prompt="who is pristine edge look her up online",
+            prompt="who is sample edge look them up online",
             scene_context="Active object: Cube\nSelected object: Cube\nMode: Object",
             runtime_facts="Blender version: 5.0.1",
             knowledge_mode=core.KNOWLEDGE_MODE_LOCAL_AUTO_WEB,
@@ -515,11 +515,11 @@ class CoreTests(unittest.TestCase):
             allow_default_web=True,
         )
 
-        self.assertEqual(seen_queries, ["pristine edge"])
+        self.assertEqual(seen_queries, ["sample edge"])
         self.assertIn("no local official docs matched", knowledge["knowledge_references"])
         self.assertNotIn("Workflow card:", knowledge["workflow_cards"])
         self.assertNotIn("Troubleshooting card:", knowledge["troubleshooting_cards"])
-        self.assertIn("https://example.com/pristine-edge", knowledge["web_references"])
+        self.assertIn("https://example.com/sample-edge", knowledge["web_references"])
 
     def test_plain_language_lookup_plans_entity_query(self) -> None:
         seen_queries: list[str] = []
@@ -528,14 +528,14 @@ class CoreTests(unittest.TestCase):
             seen_queries.append(query)
             return [
                 {
-                    "title": "Pristine Edge profile",
-                    "url": "https://example.com/pristine-edge-profile",
-                    "snippet": "Pristine Edge profile result.",
+                    "title": "Sample Edge profile",
+                    "url": "https://example.com/sample-edge-profile",
+                    "snippet": "Sample Edge profile result.",
                 }
             ]
 
         knowledge = core.retrieve_knowledge(
-            prompt="just look up pristine edge actress and tell me",
+            prompt="look up sample edge profile and tell me",
             scene_context="Active object: Cube",
             runtime_facts="Blender version: 5.0.1",
             knowledge_mode=core.KNOWLEDGE_MODE_LOCAL_AUTO_WEB,
@@ -543,8 +543,8 @@ class CoreTests(unittest.TestCase):
             allow_default_web=True,
         )
 
-        self.assertEqual(seen_queries, ["pristine edge"])
-        self.assertIn("https://example.com/pristine-edge-profile", knowledge["web_references"])
+        self.assertEqual(seen_queries, ["sample edge"])
+        self.assertIn("https://example.com/sample-edge-profile", knowledge["web_references"])
 
     def test_plain_language_person_lookup_ignores_blender_edge_word(self) -> None:
         seen_queries: list[str] = []
@@ -553,14 +553,14 @@ class CoreTests(unittest.TestCase):
             seen_queries.append(query)
             return [
                 {
-                    "title": "Pristine Edge profile",
-                    "url": "https://example.com/pristine-edge-profile",
-                    "snippet": "Pristine Edge profile result.",
+                    "title": "Sample Edge profile",
+                    "url": "https://example.com/sample-edge-profile",
+                    "snippet": "Sample Edge profile result.",
                 }
             ]
 
         knowledge = core.retrieve_knowledge(
-            prompt="web search for the female woman pristine edge",
+            prompt="web search for the public figure sample edge",
             scene_context="Active object: Cube\nSelected object: Cube\nMode: Object",
             runtime_facts="Blender version: 5.0.1",
             knowledge_mode=core.KNOWLEDGE_MODE_LOCAL_AUTO_WEB,
@@ -568,8 +568,8 @@ class CoreTests(unittest.TestCase):
             allow_default_web=True,
         )
 
-        self.assertEqual(seen_queries, ["pristine edge"])
-        self.assertIn("https://example.com/pristine-edge-profile", knowledge["web_references"])
+        self.assertEqual(seen_queries, ["sample edge"])
+        self.assertIn("https://example.com/sample-edge-profile", knowledge["web_references"])
         self.assertNotIn("Workflow card:", knowledge["workflow_cards"])
 
     def test_web_search_keeps_trying_when_first_query_results_are_irrelevant(self) -> None:
@@ -577,24 +577,24 @@ class CoreTests(unittest.TestCase):
 
         def fake_searcher(query: str) -> list[dict[str, str]]:
             seen_queries.append(query)
-            if query == "Pristine Edge":
+            if query == "Sample Edge":
                 return [
                     {
-                        "title": "Pristine Auction",
-                        "url": "https://example.com/pristine-auction",
+                        "title": "Sample Auction",
+                        "url": "https://example.com/sample-auction",
                         "snippet": "A sports memorabilia auction result.",
                     }
                 ]
             return [
                 {
-                    "title": "Pristine Edge profile",
-                    "url": "https://example.com/pristine-edge-profile",
-                    "snippet": "Pristine Edge profile result.",
+                    "title": "Sample Edge profile",
+                    "url": "https://example.com/sample-edge-profile",
+                    "snippet": "Sample Edge profile result.",
                 }
             ]
 
         knowledge = core.retrieve_knowledge(
-            prompt="who is Pristine Edge the actress?",
+            prompt="who is Sample Edge the public figure?",
             scene_context="Active object: Cube",
             runtime_facts="Blender version: 5.0.1",
             knowledge_mode=core.KNOWLEDGE_MODE_LOCAL_AUTO_WEB,
@@ -602,9 +602,9 @@ class CoreTests(unittest.TestCase):
             allow_default_web=True,
         )
 
-        self.assertEqual(seen_queries, ["Pristine Edge", '"Pristine Edge"'])
-        self.assertIn("Query: \"Pristine Edge\"", knowledge["web_references"])
-        self.assertIn('"Pristine Edge"', knowledge["knowledge_status"]["webSearchUsedQueries"])
+        self.assertEqual(seen_queries, ["Sample Edge", '"Sample Edge"'])
+        self.assertIn("Query: \"Sample Edge\"", knowledge["web_references"])
+        self.assertIn('"Sample Edge"', knowledge["knowledge_status"]["webSearchUsedQueries"])
 
     def test_system_prompt_forbids_fake_web_claims_without_web_refs(self) -> None:
         self.assertIn("Never claim you searched Google", core.SYSTEM_PROMPT)
