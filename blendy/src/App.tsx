@@ -126,6 +126,7 @@ function App() {
   const [openReceipt, setOpenReceipt] = useState<{ message: Message; receipt: AssistantReceipt } | null>(null);
   const [latestDone, setLatestDone] = useState(false);
   const [showJumpLatest, setShowJumpLatest] = useState(false);
+  const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
   const contextControlRef = useRef<HTMLDivElement | null>(null);
@@ -270,6 +271,17 @@ function App() {
       });
     });
   }
+
+  function requestComposerFocus() {
+    setComposerFocusRequest((request) => request + 1);
+  }
+
+  useEffect(() => {
+    if (!composerFocusRequest || page !== "chat" || isManagingContext) {
+      return;
+    }
+    focusComposerSoon();
+  }, [activeChatId, composerFocusRequest, isManagingContext, page]);
 
   function updateSettings(partial: Partial<AppSettings>) {
     setSettings((current) => ({ ...current, ...partial }));
@@ -597,7 +609,7 @@ function App() {
       setContextMenuOpen(false);
       setEditingChatId("");
       setPrompt("");
-      focusComposerSoon();
+      requestComposerFocus();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setMessages((current) => [
@@ -629,7 +641,7 @@ function App() {
       setContextSnapshot(result.context);
       applyDiagnostics(result.diagnostics);
       setPrompt("");
-      focusComposerSoon();
+      requestComposerFocus();
       window.requestAnimationFrame(() => {
         const node = scrollRef.current;
         if (node) {
@@ -692,7 +704,7 @@ function App() {
       setContextSnapshot(result.context);
       applyDiagnostics(result.diagnostics);
       setPrompt("");
-      focusComposerSoon();
+      requestComposerFocus();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setMessages((current) => [
@@ -737,7 +749,7 @@ function App() {
         <div className="brand">
           <img className="brand-logo" src={logoUrl} alt="" />
           <div>
-            <div className="brand-name">Blendy 1.0</div>
+            <div className="brand-name">Blendy 1.0.1</div>
             <div className="brand-subtitle">
               {page === "settings" ? "Settings" : latestDone ? "Done" : isGenerating ? "Viewing viewport..." : "Local Blender Tutor"}
             </div>
@@ -911,7 +923,6 @@ function App() {
 
             <footer className="composer">
               <textarea
-                key={activeChatId || "no-active-chat"}
                 ref={promptInputRef}
                 value={prompt}
                 onChange={(event) => setPrompt(event.target.value)}

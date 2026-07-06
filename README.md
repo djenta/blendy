@@ -6,12 +6,12 @@ context, and does not execute model-written Blender Python.
 
 ## Download
 
-[![Download Blendy 1.0 for Windows](https://img.shields.io/badge/Download-Blendy%201.0%20for%20Windows-2ea44f?style=for-the-badge&logo=windows)](https://github.com/djenta/blendy/releases/latest)
+[![Download Blendy 1.0.1 for Windows](https://img.shields.io/badge/Download-Blendy%201.0.1%20for%20Windows-2ea44f?style=for-the-badge&logo=windows)](https://github.com/djenta/blendy/releases/latest)
 
 Download the Windows installer from the latest GitHub Release:
 
 ```text
-Blendy-Local-AI-Tutor-Setup-1.0.0.exe
+Blendy-Local-AI-Tutor-Setup-1.0.1.exe
 ```
 
 ## What You Need
@@ -29,7 +29,7 @@ http://localhost:1234/v1
 
 ## Install On Windows
 
-1. Download `Blendy-Local-AI-Tutor-Setup-1.0.0.exe`.
+1. Download `Blendy-Local-AI-Tutor-Setup-1.0.1.exe`.
 2. Run the installer.
 3. Open Blender.
 4. In the 3D View, press `N` to open the right sidebar.
