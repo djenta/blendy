@@ -58,6 +58,20 @@ Save your `.blend` file first. The add-on reads `truth.md` beside that saved
 file and can create/open it for you. It never auto-writes model suggestions into
 `truth.md`; suggested updates are shown in chat for you to copy manually.
 
+## User Paths
+
+Blendy should not depend on the original developer's folders. At runtime it uses
+the current user's install and app-data locations:
+
+- Project memory is `truth.md` beside the user's saved `.blend` file.
+- App settings, chats, diagnostics, and bridge discovery live in the user's
+  Blendy app-data folder.
+- The Blender bridge writes its current local URL to that app-data folder so the
+  desktop app can find the user's own Blender session.
+
+So if Alice installs Blendy, it should use Alice's folders. If Bob installs it,
+it should use Bob's folders.
+
 ## Safety
 
 V1 is tutor-only. It does not execute Blender Python returned by the model and

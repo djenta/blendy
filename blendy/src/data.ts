@@ -1,9 +1,9 @@
 import type { ContextSnapshot, Message } from "./types";
 
 export const contextSnapshot: ContextSnapshot = {
-  project: "iphone_product_ad_start.blend",
-  projectBriefPath: "C:\\Users\\Frank-\\Documents\\Blender Artschool\\truth.md",
-  appDataPath: "C:\\Users\\Frank-\\AppData\\Roaming\\Blendy",
+  project: "Example Blender project",
+  projectBriefPath: "Project Brief lives beside the user's saved .blend file",
+  appDataPath: "Stored in the user's Blendy app data folder",
   units: "Millimeters",
   selectedObject: "Cube",
   mode: "Object Mode",
@@ -43,7 +43,7 @@ export const contextSnapshot: ContextSnapshot = {
     },
   ],
   brief:
-    "iPhone-style product render. Beginner hard-surface modeling, one clear checkpoint at a time. User works in millimeters.",
+    "Beginner hard-surface modeling project. One clear checkpoint at a time. User works in millimeters.",
 };
 
 export const seedMessages: Message[] = [
