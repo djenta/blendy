@@ -11,7 +11,7 @@ context, and does not execute model-written Blender Python.
 Download the Windows installer from the latest GitHub Release:
 
 ```text
-Blendy Local AI Tutor Setup 1.0.0.exe
+Blendy-Local-AI-Tutor-Setup-1.0.0.exe
 ```
 
 ## What You Need
@@ -29,7 +29,7 @@ http://localhost:1234/v1
 
 ## Install On Windows
 
-1. Download `Blendy Local AI Tutor Setup 1.0.0.exe`.
+1. Download `Blendy-Local-AI-Tutor-Setup-1.0.0.exe`.
 2. Run the installer.
 3. Open Blender.
 4. In the 3D View, press `N` to open the right sidebar.
