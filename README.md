@@ -4,6 +4,16 @@ Blendy is a local Blender tutor that connects Blender to an LM Studio model
 running on your own computer. It is tutor-only: it gives guidance, reads scene
 context, and does not execute model-written Blender Python.
 
+## Download
+
+[![Download Blendy 1.0 for Windows](https://img.shields.io/badge/Download-Blendy%201.0%20for%20Windows-2ea44f?style=for-the-badge&logo=windows)](https://github.com/djenta/blender-artschool/releases/latest)
+
+Download the Windows installer from the latest GitHub Release:
+
+```text
+Blendy Local AI Tutor Setup 1.0.0.exe
+```
+
 ## What You Need
 
 - Windows
