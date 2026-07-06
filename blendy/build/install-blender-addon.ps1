@@ -76,7 +76,9 @@ try {
     }
   }
 
-  $programRoots = @($env:ProgramFiles, ${env:ProgramFiles(x86)}) | Where-Object { $_ }
+  $programRoots = @($env:ProgramW6432, $env:ProgramFiles, ${env:ProgramFiles(x86)}) |
+    Where-Object { $_ } |
+    Select-Object -Unique
   foreach ($root in $programRoots) {
     $foundationRoot = Join-Path $root "Blender Foundation"
     if (-not (Test-Path -LiteralPath $foundationRoot)) {
