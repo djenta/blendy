@@ -870,6 +870,11 @@ button {
   color: #c14c44;
 }
 
+.chat-history-icon.danger.confirm {
+  background: rgba(193, 76, 68, 0.14);
+  color: #c14c44;
+}
+
 .chat-rename-form {
   grid-column: 1 / -1;
   display: grid;

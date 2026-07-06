@@ -11,6 +11,11 @@ assert(
 );
 assert(appSource.includes("composerFocusRequest"), "Composer focus request state should exist.");
 assert(appSource.includes("function requestComposerFocus()"), "Chat management should request composer focus after async state settles.");
+assert(
+  !appSource.includes("window.confirm("),
+  "Delete chat should use an in-app confirmation, not a native modal that can break Electron focus.",
+);
+assert(appSource.includes("confirmingDeleteChatId"), "Delete chat should use explicit in-app confirmation state.");
 
 const deleteChatMatch = appSource.match(/async function deleteChat[\s\S]*?async function captureViewport/);
 assert(deleteChatMatch, "deleteChat function should be present.");

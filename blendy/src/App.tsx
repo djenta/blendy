@@ -123,6 +123,7 @@ function App() {
   const [activeChatId, setActiveChatId] = useState("");
   const [editingChatId, setEditingChatId] = useState("");
   const [editingChatTitle, setEditingChatTitle] = useState("");
+  const [confirmingDeleteChatId, setConfirmingDeleteChatId] = useState("");
   const [openReceipt, setOpenReceipt] = useState<{ message: Message; receipt: AssistantReceipt } | null>(null);
   const [latestDone, setLatestDone] = useState(false);
   const [showJumpLatest, setShowJumpLatest] = useState(false);
@@ -233,6 +234,7 @@ function App() {
       setContextMenuOpen(false);
       setChatMenuOpen(false);
       setEditingChatId("");
+      setConfirmingDeleteChatId("");
     }
     window.addEventListener("pointerdown", handlePointerDown);
     return () => window.removeEventListener("pointerdown", handlePointerDown);
@@ -600,6 +602,7 @@ function App() {
     setChatMenuOpen(false);
     setContextMenuOpen(false);
     setEditingChatId("");
+    setConfirmingDeleteChatId("");
     setIsManagingContext(true);
     try {
       const result = await window.blendyApp.freshChat({ backendSettings });
@@ -634,6 +637,7 @@ function App() {
     setChatMenuOpen(false);
     setContextMenuOpen(false);
     setEditingChatId("");
+    setConfirmingDeleteChatId("");
     setIsManagingContext(true);
     try {
       const result = await window.blendyApp.switchChat({ chatId, backendSettings });
@@ -666,6 +670,7 @@ function App() {
   }
 
   function beginRenameChat(session: ChatSession) {
+    setConfirmingDeleteChatId("");
     setEditingChatId(session.id);
     setEditingChatTitle(session.title);
   }
@@ -690,13 +695,15 @@ function App() {
     if (!window.blendyApp || isGenerating || isManagingContext) {
       return;
     }
-    const confirmed = window.confirm("Delete this chat? This removes the saved local conversation.");
-    if (!confirmed) {
+    if (confirmingDeleteChatId !== chatId) {
+      setEditingChatId("");
+      setConfirmingDeleteChatId(chatId);
       return;
     }
     setChatMenuOpen(false);
     setContextMenuOpen(false);
     setEditingChatId("");
+    setConfirmingDeleteChatId("");
     setIsManagingContext(true);
     try {
       const result = await window.blendyApp.deleteChat({ chatId, backendSettings });
@@ -749,7 +756,7 @@ function App() {
         <div className="brand">
           <img className="brand-logo" src={logoUrl} alt="" />
           <div>
-            <div className="brand-name">Blendy 1.0.1</div>
+            <div className="brand-name">Blendy 1.0.2</div>
             <div className="brand-subtitle">
               {page === "settings" ? "Settings" : latestDone ? "Done" : isGenerating ? "Viewing viewport..." : "Local Blender Tutor"}
             </div>
@@ -908,8 +915,14 @@ function App() {
                               <button className="chat-history-icon" type="button" onClick={() => beginRenameChat(session)} aria-label="Rename chat">
                                 <Pencil size={13} />
                               </button>
-                              <button className="chat-history-icon danger" type="button" onClick={() => deleteChat(session.id)} aria-label="Delete chat">
-                                <Trash2 size={13} />
+                              <button
+                                className={`chat-history-icon danger ${confirmingDeleteChatId === session.id ? "confirm" : ""}`}
+                                type="button"
+                                onClick={() => deleteChat(session.id)}
+                                aria-label={confirmingDeleteChatId === session.id ? "Confirm delete chat" : "Delete chat"}
+                                title={confirmingDeleteChatId === session.id ? "Click again to delete" : "Delete chat"}
+                              >
+                                {confirmingDeleteChatId === session.id ? <X size={13} /> : <Trash2 size={13} />}
                               </button>
                             </>
                           )}
