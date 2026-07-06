@@ -6,7 +6,7 @@ context, and does not execute model-written Blender Python.
 
 ## Download
 
-[![Download Blendy 1.0 for Windows](https://img.shields.io/badge/Download-Blendy%201.0%20for%20Windows-2ea44f?style=for-the-badge&logo=windows)](https://github.com/djenta/blender-artschool/releases/latest)
+[![Download Blendy 1.0 for Windows](https://img.shields.io/badge/Download-Blendy%201.0%20for%20Windows-2ea44f?style=for-the-badge&logo=windows)](https://github.com/djenta/blendy/releases/latest)
 
 Download the Windows installer from the latest GitHub Release:
 
