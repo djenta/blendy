@@ -52,7 +52,7 @@ class CoreTests(unittest.TestCase):
         self.assertIn("BLENDER VERSION LOCK", payload["messages"][-1]["content"])
         self.assertIn("Active Blender runtime version: 5.0.1", payload["messages"][-1]["content"])
         self.assertIn("Treat this as authoritative", payload["messages"][-1]["content"])
-        self.assertIn("No viewport screenshot is attached", payload["messages"][-1]["content"])
+        self.assertIn("No Blender screen screenshot is attached", payload["messages"][-1]["content"])
         self.assertIn("BLENDER RUNTIME FACTS", payload["messages"][-1]["content"])
         self.assertIn("SEMANTIC SCENE CARD", payload["messages"][-1]["content"])
         self.assertIn("READ-ONLY VERIFICATION NOTES", payload["messages"][-1]["content"])
@@ -135,6 +135,7 @@ class CoreTests(unittest.TestCase):
         self.assertIn("I can see", core.SYSTEM_PROMPT)
         self.assertIn("I'm inferring", core.SYSTEM_PROMPT)
         self.assertIn("I can't tell from the current Blendy context", core.SYSTEM_PROMPT)
+        self.assertIn("For node editor questions, trust the live node context inventory", core.SYSTEM_PROMPT)
         self.assertIn("startup defaults, preferences, future new files, or general app behavior", core.SYSTEM_PROMPT)
         self.assertIn("Name the Blender mode, tool/menu/operator", core.SYSTEM_PROMPT)
         self.assertIn("direct answer first", core.SYSTEM_PROMPT)
@@ -209,7 +210,7 @@ class CoreTests(unittest.TestCase):
         content = payload["messages"][-1]["content"]
         self.assertIsInstance(content, list)
         self.assertEqual(content[0]["type"], "text")
-        self.assertIn("Viewport screenshot is attached", content[0]["text"])
+        self.assertIn("Blender screen screenshot is attached", content[0]["text"])
         self.assertEqual(content[1]["type"], "image_url")
         self.assertEqual(content[1]["image_url"]["url"], "data:image/png;base64,abc")
 
@@ -240,6 +241,13 @@ class CoreTests(unittest.TestCase):
                 context_mode=core.CONTEXT_MODE_AUTO,
                 include_screenshot=False,
                 prompt="Does this shape look like an iPhone?",
+            )
+        )
+        self.assertTrue(
+            core.should_send_screenshot(
+                context_mode=core.CONTEXT_MODE_AUTO,
+                include_screenshot=True,
+                prompt="There is no streaks button on this glare node",
             )
         )
 

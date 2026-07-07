@@ -14,7 +14,7 @@ export const contextSnapshot: ContextSnapshot = {
   ],
   materials: ["Material"],
   scene: "1 mesh · 1 camera · 2 lights",
-  visual: "Viewport will be inspected for visual prompts",
+  visual: "Blender screen will be captured for visual prompts",
   contextTokens: 6400,
   baselineTokens: 4900,
   conversationTokens: 1500,
@@ -53,7 +53,7 @@ export const seedMessages: Message[] = [
     content:
       "I typed 0.01 into the bevel modifier and segments 5, but the shape still looks sharp. Does using millimeters matter?",
     context:
-      "Used: Units mm · Cube selected · Bevel 0.01mm / 5 seg · Viewport inspected",
+      "Used: Units mm · Cube selected · Bevel 0.01mm / 5 seg · Blender screen captured",
   },
   {
     id: "m2",

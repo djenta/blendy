@@ -355,16 +355,16 @@ if bpy is not None:
         include_screenshot: BoolProperty(
             name="Visual",
             default=True,
-            description="Allow viewport screenshots when the context mode calls for visual input",
+            description="Allow Blender screen screenshots when the context mode calls for visual input",
         )
         context_mode: EnumProperty(
             name="Context Mode",
             default=core.CONTEXT_MODE_AUTO,
-            description="Choose when the tutor should receive a viewport image",
+            description="Choose when the tutor should receive a Blender screen image",
             items=[
-                (core.CONTEXT_MODE_AUTO, "Auto", "Use scene data every time and add a viewport image for visual prompts"),
+                (core.CONTEXT_MODE_AUTO, "Auto", "Use scene data every time and add a Blender screen image for visual prompts"),
                 (core.CONTEXT_MODE_SCENE, "Scene Data Only", "Never attach a screenshot"),
-                (core.CONTEXT_MODE_VIEWPORT, "Viewport Screenshot", "Attach a viewport screenshot whenever Visual is enabled"),
+                (core.CONTEXT_MODE_VIEWPORT, "Blender Screen", "Attach a Blender screen screenshot whenever Visual is enabled"),
             ],
         )
         include_runtime_facts: BoolProperty(
@@ -546,6 +546,274 @@ if bpy is not None:
         suffix = f" ({field_text})" if field_text else ""
         visible = "on" if modifier.show_viewport else "off"
         return f"- {modifier.name}: {modifier.type}, viewport={visible}{suffix}"
+
+
+    def _format_node_value(value: Any, digits: int = 3) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, int):
+            return str(value)
+        if isinstance(value, float):
+            return f"{value:.{digits}g}"
+        if isinstance(value, str):
+            return value
+        try:
+            if hasattr(value, "__len__") and not isinstance(value, (bytes, bytearray)):
+                parts = list(value)
+                if 0 < len(parts) <= 4 and all(isinstance(part, (int, float, bool)) for part in parts):
+                    return "(" + ", ".join(_format_node_value(part, digits) for part in parts) + ")"
+        except Exception:
+            return ""
+        return ""
+
+
+    def _node_socket_name(socket: Any) -> str:
+        return getattr(socket, "name", "") or getattr(socket, "identifier", "") or "socket"
+
+
+    def _node_input_defaults(node: Any, limit: int = 8) -> list[str]:
+        defaults: list[str] = []
+        try:
+            sockets = list(getattr(node, "inputs", []))
+        except Exception:
+            return defaults
+        for socket in sockets[:limit]:
+            if getattr(socket, "is_linked", False):
+                continue
+            if not hasattr(socket, "default_value"):
+                continue
+            try:
+                formatted = _format_node_value(socket.default_value)
+            except Exception:
+                formatted = ""
+            if formatted:
+                defaults.append(f"{_node_socket_name(socket)}={formatted}")
+        return defaults
+
+
+    def _node_property_values(node: Any, limit: int = 12) -> list[str]:
+        skip = {
+            "rna_type",
+            "type",
+            "name",
+            "label",
+            "location",
+            "width",
+            "height",
+            "dimensions",
+            "inputs",
+            "outputs",
+            "internal_links",
+            "parent",
+            "select",
+            "show_options",
+            "show_preview",
+            "show_texture",
+            "use_custom_color",
+            "color",
+        }
+        values: list[str] = []
+        try:
+            properties = node.bl_rna.properties
+        except Exception:
+            return values
+        for prop in properties:
+            identifier = getattr(prop, "identifier", "")
+            if not identifier or identifier in skip or identifier.startswith("bl_"):
+                continue
+            prop_type = getattr(prop, "type", "")
+            is_array = bool(getattr(prop, "is_array", False))
+            if prop_type not in {"BOOLEAN", "INT", "FLOAT", "ENUM", "STRING"} and not is_array:
+                continue
+            try:
+                formatted = _format_node_value(getattr(node, identifier))
+            except Exception:
+                continue
+            if not formatted:
+                continue
+            values.append(f"{identifier}={formatted}")
+            if len(values) >= limit:
+                break
+        return values
+
+
+    def _node_summary_line(node: Any) -> str:
+        title = getattr(node, "name", "") or "Node"
+        label = getattr(node, "label", "") or ""
+        bl_label = getattr(node, "bl_label", "") or ""
+        bl_idname = getattr(node, "bl_idname", "") or getattr(node, "type", "")
+        pieces = [f"- {title}"]
+        if label and label != title:
+            pieces.append(f"label={label}")
+        if bl_label or bl_idname:
+            type_text = bl_label if bl_label else bl_idname
+            if bl_idname and bl_idname != type_text:
+                type_text = f"{type_text} ({bl_idname})"
+            pieces.append(f"type={type_text}")
+        if getattr(node, "mute", False):
+            pieces.append("muted=true")
+        prop_values = _node_property_values(node)
+        if prop_values:
+            pieces.append("settings: " + ", ".join(prop_values))
+        input_defaults = _node_input_defaults(node)
+        if input_defaults:
+            pieces.append("unlinked inputs: " + ", ".join(input_defaults))
+        return "; ".join(pieces)
+
+
+    def _node_link_summary(node_tree: Any, limit: int = 24) -> list[str]:
+        lines: list[str] = []
+        try:
+            links = list(getattr(node_tree, "links", []))
+        except Exception:
+            return lines
+        for link in links[:limit]:
+            if hasattr(link, "is_valid") and not link.is_valid:
+                continue
+            try:
+                from_node = getattr(link.from_node, "name", "node")
+                from_socket = _node_socket_name(link.from_socket)
+                to_node = getattr(link.to_node, "name", "node")
+                to_socket = _node_socket_name(link.to_socket)
+            except Exception:
+                continue
+            lines.append(f"- {from_node}.{from_socket} -> {to_node}.{to_socket}")
+        return lines
+
+
+    def _node_tree_summary(title: str, node_tree: Any, node_limit: int = 24) -> list[str]:
+        if not node_tree:
+            return []
+        try:
+            nodes = list(node_tree.nodes)
+        except Exception:
+            return []
+        lines = [f"{title}: {getattr(node_tree, 'name', 'unnamed node tree')}"]
+        active = getattr(getattr(node_tree, "nodes", None), "active", None)
+        if active:
+            lines.append(f"Active node: {getattr(active, 'name', 'unknown')}")
+        if not nodes:
+            lines.append("- No nodes in this tree.")
+            return lines
+        lines.append("Nodes:")
+        for node in nodes[:node_limit]:
+            lines.append(_node_summary_line(node))
+        if len(nodes) > node_limit:
+            lines.append(f"... {len(nodes) - node_limit} more nodes not listed")
+        links = _node_link_summary(node_tree)
+        if links:
+            lines.append("Links:")
+            lines.extend(links)
+        return lines
+
+
+    def _visible_editor_context(context: Any) -> list[str]:
+        lines: list[str] = []
+        try:
+            screen = context.window.screen
+        except Exception:
+            return lines
+        for area in getattr(screen, "areas", []):
+            area_type = getattr(area, "type", "UNKNOWN")
+            detail = ""
+            space = getattr(area, "spaces", None).active if getattr(area, "spaces", None) else None
+            if space and area_type == "NODE_EDITOR":
+                tree_type = getattr(space, "tree_type", "") or "unknown"
+                node_tree = getattr(space, "edit_tree", None) or getattr(space, "node_tree", None)
+                tree_name = getattr(node_tree, "name", "") if node_tree else ""
+                detail = f" tree_type={tree_type}" + (f", tree={tree_name}" if tree_name else "")
+            elif space and area_type == "PROPERTIES":
+                detail = f" context={getattr(space, 'context', 'unknown')}"
+            elif space and area_type == "VIEW_3D":
+                detail = f" shading={getattr(getattr(space, 'shading', None), 'type', 'unknown')}"
+            lines.append(f"- {area_type}{detail}")
+        return lines
+
+
+    def _render_settings_context(scene: Any) -> list[str]:
+        lines = [
+            "Render and display settings:",
+            f"- render engine={getattr(scene.render, 'engine', 'unknown')}",
+        ]
+        try:
+            lines.append(f"- compositor use_nodes={bool(scene.use_nodes)}")
+        except Exception:
+            pass
+        view_settings = getattr(scene, "view_settings", None)
+        if view_settings:
+            bits = []
+            for name in ("view_transform", "look", "exposure", "gamma"):
+                if hasattr(view_settings, name):
+                    bits.append(f"{name}={getattr(view_settings, name)}")
+            if bits:
+                lines.append("- color management: " + ", ".join(bits))
+        return lines
+
+
+    def _node_context_summary(context: Any) -> list[str]:
+        lines = ["Node/editor context:"]
+        visible = _visible_editor_context(context)
+        if visible:
+            lines.append("Visible Blender editors:")
+            lines.extend(visible)
+        lines.extend(_render_settings_context(context.scene))
+
+        summaries: list[list[str]] = []
+        seen: set[int] = set()
+
+        def add_tree(title: str, node_tree: Any) -> None:
+            if not node_tree:
+                return
+            key = id(node_tree)
+            if key in seen:
+                return
+            seen.add(key)
+            summary = _node_tree_summary(title, node_tree)
+            if summary:
+                summaries.append(summary)
+
+        try:
+            screen = context.window.screen
+            for area in getattr(screen, "areas", []):
+                if getattr(area, "type", "") != "NODE_EDITOR":
+                    continue
+                space = getattr(area, "spaces", None).active if getattr(area, "spaces", None) else None
+                if not space:
+                    continue
+                add_tree(
+                    f"Visible node editor ({getattr(space, 'tree_type', 'unknown')})",
+                    getattr(space, "edit_tree", None) or getattr(space, "node_tree", None),
+                )
+        except Exception:
+            pass
+
+        if getattr(context.scene, "use_nodes", False):
+            add_tree("Scene compositor node tree", getattr(context.scene, "node_tree", None))
+
+        active = context.active_object
+        if active:
+            for modifier in getattr(active, "modifiers", []):
+                node_group = getattr(modifier, "node_group", None)
+                if node_group:
+                    add_tree(f"Geometry node tree from modifier {modifier.name}", node_group)
+            try:
+                material_slots = list(getattr(active, "material_slots", []))
+            except Exception:
+                material_slots = []
+            for slot in material_slots[:6]:
+                material = getattr(slot, "material", None)
+                if material and getattr(material, "use_nodes", False):
+                    add_tree(f"Material node tree {material.name}", getattr(material, "node_tree", None))
+
+        if not summaries:
+            lines.append("- No compositor, material, geometry, or visible node editor tree was available in this context.")
+            return lines
+        for summary in summaries:
+            lines.append("")
+            lines.extend(summary)
+        return lines
 
 
     def _object_summary(obj: Any, selected: bool = False) -> str:
@@ -766,6 +1034,8 @@ if bpy is not None:
             lines.append("")
             lines.extend(_active_object_context(context.active_object, context))
         lines.append("")
+        lines.extend(_node_context_summary(context))
+        lines.append("")
         lines.append(f"Scene object list (first {object_limit}):")
         for obj in objects[:object_limit]:
             lines.append(_object_summary(obj, selected=obj in selected))
@@ -906,18 +1176,31 @@ if bpy is not None:
             captured = False
             for window in bpy.context.window_manager.windows:
                 screen = window.screen
-                for area in screen.areas:
-                    if area.type != "VIEW_3D":
-                        continue
-                    try:
-                        with bpy.context.temp_override(window=window, screen=screen, area=area):
-                            bpy.ops.screen.screenshot_area(filepath=path)
-                        captured = True
-                        break
-                    except Exception:
-                        continue
-                if captured:
+                try:
+                    with bpy.context.temp_override(window=window, screen=screen):
+                        try:
+                            bpy.ops.screen.screenshot(filepath=path, hide_props_region=False)
+                        except TypeError:
+                            bpy.ops.screen.screenshot(filepath=path)
+                    captured = True
                     break
+                except Exception:
+                    continue
+            if not captured:
+                for window in bpy.context.window_manager.windows:
+                    screen = window.screen
+                    for area in screen.areas:
+                        if area.type != "VIEW_3D":
+                            continue
+                        try:
+                            with bpy.context.temp_override(window=window, screen=screen, area=area):
+                                bpy.ops.screen.screenshot_area(filepath=path)
+                            captured = True
+                            break
+                        except Exception:
+                            continue
+                    if captured:
+                        break
             if not captured:
                 try:
                     bpy.ops.screen.screenshot(filepath=path, hide_props_region=False)
@@ -1016,7 +1299,7 @@ if bpy is not None:
         bevel = _active_bevel_context(active)
         if bevel:
             facts.append(bevel)
-        facts.append("Viewport inspected" if screenshot else "Scene data inspected")
+        facts.append("Blender screen captured" if screenshot else "Scene data inspected")
         return "Used: " + " | ".join(facts)
 
 
@@ -1065,14 +1348,14 @@ if bpy is not None:
         blend_path = Path(bpy.data.filepath) if bpy.data.filepath else None
         project_name = blend_path.name if blend_path else "Unsaved Blender Project"
         context_line = _bridge_context_line(context, bool(screenshot))
-        visual = "Viewport inspected" if screenshot else "Viewport not inspected"
+        visual = "Blender screen captured" if screenshot else "Blender screen not captured"
         if screenshot_error:
-            visual = f"Viewport capture failed: {screenshot_error}"
+            visual = f"Blender screen capture failed: {screenshot_error}"
         visual_context = "\n".join(
             [
                 context_line,
                 visual,
-                "Viewport screenshot is attached to this message." if screenshot else "No viewport screenshot is attached.",
+                "Blender screen screenshot is attached to this message." if screenshot else "No Blender screen screenshot is attached.",
             ]
         )
         context_text = core.build_context_text(
@@ -1190,7 +1473,7 @@ if bpy is not None:
 
 
     class _BlendyBridgeHandler(BaseHTTPRequestHandler):
-        server_version = "BlendyBridge/1.0.3"
+        server_version = "BlendyBridge/1.0.4"
 
         def log_message(self, format: str, *args: Any) -> None:
             return None
@@ -1515,7 +1798,7 @@ if bpy is not None:
             props.active_task = "CHAT"
             props.status_kind = "BUSY"
             props.status_text = (
-                "Asking local tutor with viewport image..."
+                "Asking local tutor with Blender screen image..."
                 if screenshot
                 else "Asking local tutor with scene data..."
             )

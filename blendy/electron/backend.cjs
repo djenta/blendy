@@ -47,6 +47,14 @@ const VISUAL_PROMPT_KEYWORDS = [
   "frame",
   "camera",
   "render",
+  "node",
+  "nodes",
+  "compositor",
+  "glare",
+  "bloom",
+  "threshold",
+  "streaks",
+  "fog glow",
   "object",
   "model",
   "mesh",
@@ -86,6 +94,7 @@ Truth ladder:
 - Use model memory only as background, never as stronger evidence than provided Blender facts.
 - If the evidence is incomplete, say it naturally: "I can see...", "I'm inferring...", or "I can't tell from the current Blendy context."
 - Do not invent Blender state, UI locations, file contents, object names, measurements, or actions you cannot verify from the provided context.
+- For node editor questions, trust the live node context inventory before Blender memory. Only name node controls, modes, sockets, dropdown values, or links that appear in CURRENT BLENDER SCENE CONTEXT, screenshot evidence, or cited docs. If node details are absent, say you cannot inspect the node internals from the current context.
 - If the user asks about Blender startup defaults, preferences, future new files, or general app behavior, answer that global Blender question instead of forcing the answer back to the current project units or scene.
 - If the latest prompt is clearly not a Blender question, do not force the answer through Blender docs or the current scene. If WEB REFERENCES contains sources, answer the non-Blender question from those sources instead of saying you are only a Blender tutor. If no source is available, say the lookup did not return a usable source.
 - If local and web references still do not support a confident answer, ask one clarifying question instead of inventing Blender steps.
@@ -215,7 +224,7 @@ function defaultBridgeContext(settings, errorMessage = "") {
       summary: "Start Blender and launch the Blendy bridge from the N panel.",
       materials: [],
     },
-    visual: "Viewport not inspected",
+    visual: "Blender screen not captured",
     brief: "",
     used: {
       screenshot: false,
@@ -326,7 +335,7 @@ function contextToSnapshot(context, userDataPath, usage = null, promptPacketFile
     })),
     materials: context.scene?.materials || [],
     scene: context.scene?.summary || context.scene?.name || "Unknown",
-    visual: context.visual || "Viewport not inspected",
+    visual: context.visual || "Blender screen not captured",
     brief: context.brief || "",
     bridgeOk: Boolean(context.ok),
     bridgeStatus: context.ok ? "Connected" : context.error || "Disconnected",
@@ -739,7 +748,7 @@ function sanitizePromptPacketContent(content) {
       return {
         type: "image_url",
         image_url: {
-          url: "[omitted viewport screenshot data]",
+          url: "[omitted Blender screen screenshot data]",
         },
       };
     }
@@ -758,7 +767,7 @@ function writePromptPacket(filePath, { payload, prompt, context }) {
   writeJson(filePath, {
     version: 1,
     createdAt: new Date().toISOString(),
-    note: "Exact text packet sent to LM Studio. Viewport screenshot data is intentionally omitted.",
+    note: "Exact text packet sent to LM Studio. Blender screen screenshot data is intentionally omitted.",
     prompt,
     contextLine: context.contextLine || "",
     model: payload.model || "auto",
@@ -1091,7 +1100,7 @@ function buildContextText(prompt, context, compactedSummary) {
   const visualStatus = [
     context.contextLine || "Used: Blender context unavailable",
     context.visual || "Viewport status unavailable",
-    context.screenshotDataUrl ? "Viewport screenshot is attached to this message." : "No viewport screenshot is attached.",
+    context.screenshotDataUrl ? "Blender screen screenshot is attached to this message." : "No Blender screen screenshot is attached.",
   ].join("\n");
   return `USER PROMPT
 ${prompt.trim()}

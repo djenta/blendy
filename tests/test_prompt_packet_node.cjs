@@ -84,7 +84,7 @@ assert.deepStrictEqual(packet.routerTrace, routerTrace);
 assert.deepStrictEqual(packet.selectedCards, ["Bevel Modifier Appears to Do Nothing"]);
 assert(!Object.prototype.hasOwnProperty.call(packet, "tutorStyle"));
 assert(packetText.includes("ROUTER DECISION"));
-assert(packetText.includes("[omitted viewport screenshot data]"));
+assert(packetText.includes("[omitted Blender screen screenshot data]"));
 assert(!packetText.includes("SCREENSHOT_SHOULD_NOT_BE_WRITTEN"));
 assert(!packetText.includes("data:image/png;base64"));
 

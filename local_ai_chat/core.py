@@ -132,6 +132,14 @@ VISUAL_PROMPT_KEYWORDS = (
     "frame",
     "camera",
     "render",
+    "node",
+    "nodes",
+    "compositor",
+    "glare",
+    "bloom",
+    "threshold",
+    "streaks",
+    "fog glow",
     "object",
     "model",
     "mesh",
@@ -173,6 +181,7 @@ Truth ladder:
 - Use model memory only as background, never as stronger evidence than provided Blender facts.
 - If the evidence is incomplete, say it naturally: "I can see...", "I'm inferring...", or "I can't tell from the current Blendy context."
 - Do not invent Blender state, UI locations, file contents, object names, measurements, or actions you cannot verify from the provided context.
+- For node editor questions, trust the live node context inventory before Blender memory. Only name node controls, modes, sockets, dropdown values, or links that appear in CURRENT BLENDER SCENE CONTEXT, screenshot evidence, or cited docs. If node details are absent, say you cannot inspect the node internals from the current context.
 - If the user asks about Blender startup defaults, preferences, future new files, or general app behavior, answer that global Blender question instead of forcing the answer back to the current project units or scene.
 - If the latest prompt is clearly not a Blender question, do not force the answer through Blender docs or the current scene. If WEB REFERENCES contains sources, answer the non-Blender question from those sources instead of saying you are only a Blender tutor. If no source is available, say the lookup did not return a usable source. Do not redirect back to the cube, scene, or Blender unless the user asks.
 - If local and web references still do not support a confident answer, ask one clarifying question instead of inventing Blender steps.
@@ -2701,9 +2710,9 @@ def build_chat_payload(
 ) -> dict[str, Any]:
     model = (model_name or DEFAULT_MODEL_NAME).strip()
     visual_context = (
-        "Viewport screenshot is attached to this message."
+        "Blender screen screenshot is attached to this message."
         if screenshot_data_url
-        else "No viewport screenshot is attached. For visual questions, use scene data only and say if you cannot tell."
+        else "No Blender screen screenshot is attached. For visual questions, use scene data only and say if you cannot tell."
     )
     if not any(
         (

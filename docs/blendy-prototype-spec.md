@@ -18,11 +18,11 @@ the full Blender bridge and LM Studio backend.
 ## Brand
 
 - App name: Blendy.
-- Version label in top bar: `Blendy 1.0.3`.
+- Version label in top bar: `Blendy 1.0.4`.
 - Logo asset: tracked app artwork under `blendy/src/assets/`.
 - Logo use:
   - Windows app icon.
-  - Small top-left app mark beside `Blendy 1.0.3`.
+  - Small top-left app mark beside `Blendy 1.0.4`.
   - Subtle empty-state mark.
   - Do not repeat in message rows.
 

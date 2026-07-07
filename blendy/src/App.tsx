@@ -756,9 +756,9 @@ function App() {
         <div className="brand">
           <img className="brand-logo" src={logoUrl} alt="" />
           <div>
-            <div className="brand-name">Blendy 1.0.3</div>
+            <div className="brand-name">Blendy 1.0.4</div>
             <div className="brand-subtitle">
-              {page === "settings" ? "Settings" : latestDone ? "Done" : isGenerating ? "Viewing viewport..." : "Local Blender Tutor"}
+              {page === "settings" ? "Settings" : latestDone ? "Done" : isGenerating ? "Reading Blender..." : "Local Blender Tutor"}
             </div>
           </div>
         </div>
@@ -1164,7 +1164,7 @@ function ContextDrawer({
 
       <ContextSection icon={<Image size={16} />} title="Visual">
         <p className="drawer-copy">{contextSnapshot.visual}</p>
-        <button className="secondary-button" type="button" onClick={onCaptureViewport}>Capture viewport</button>
+        <button className="secondary-button" type="button" onClick={onCaptureViewport}>Capture screen</button>
       </ContextSection>
 
       <ContextSection icon={<FileText size={16} />} title="Project Brief">
@@ -1334,7 +1334,7 @@ function SettingsPage({
         <DataLine label="Discovery file" value={contextSnapshot.bridgeDiscoveryPath || "Auto"} />
         <DataLine label="Chat file" value={chatPath || "Not created yet"} />
         <DataLine label="Prompt packet" value={contextSnapshot.promptPacketPath || "Not created yet"} />
-        <p className="setting-note">Diagnostics opens the latest model request Blendy sent for this project, with viewport screenshot data omitted, so you can inspect grounding, router choices, and selected cards.</p>
+        <p className="setting-note">Diagnostics opens the latest model request Blendy sent for this project, with Blender screen screenshot data omitted, so you can inspect grounding, router choices, and selected cards.</p>
         <button
           className="secondary-button"
           type="button"
