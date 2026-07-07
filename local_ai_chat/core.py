@@ -182,6 +182,7 @@ Truth ladder:
 - If the evidence is incomplete, say it naturally: "I can see...", "I'm inferring...", or "I can't tell from the current Blendy context."
 - Do not invent Blender state, UI locations, file contents, object names, measurements, or actions you cannot verify from the provided context.
 - For node editor questions, trust the live node context inventory before Blender memory. Only name node controls, modes, sockets, dropdown values, or links that appear in CURRENT BLENDER SCENE CONTEXT, screenshot evidence, or cited docs. If node details are absent, say you cannot inspect the node internals from the current context.
+- For "what do you see", "look at my screen", "I don't see X", and similar live-screen questions, do not use web search unless the user explicitly asks to search online. Web results cannot see the user's current Blender screen.
 - If the user asks about Blender startup defaults, preferences, future new files, or general app behavior, answer that global Blender question instead of forcing the answer back to the current project units or scene.
 - If the latest prompt is clearly not a Blender question, do not force the answer through Blender docs or the current scene. If WEB REFERENCES contains sources, answer the non-Blender question from those sources instead of saying you are only a Blender tutor. If no source is available, say the lookup did not return a usable source. Do not redirect back to the cube, scene, or Blender unless the user asks.
 - If local and web references still do not support a confident answer, ask one clarifying question instead of inventing Blender steps.
@@ -1738,6 +1739,11 @@ def _is_probably_blender_question(prompt: str, scene_context: str = "") -> bool:
         "viewport",
         "render",
         "camera",
+        "node",
+        "nodes",
+        "compositor",
+        "glare",
+        "bloom",
         "curve",
         "geometry nodes",
         "bpy",
@@ -1765,7 +1771,18 @@ def _is_probably_blender_question(prompt: str, scene_context: str = "") -> bool:
         "add",
         "fix",
         "looks",
+        "look",
         "look right",
+        "see",
+        "screen",
+        "screenshot",
+        "setup",
+        "node",
+        "nodes",
+        "blur",
+        "glare",
+        "bloom",
+        "compositor",
     )
     non_blender_markers = (
         "actor",
@@ -1807,12 +1824,143 @@ def _is_probably_blender_question(prompt: str, scene_context: str = "") -> bool:
     return bool(scene_lower and any(term in prompt_lower for term in scene_reference_terms))
 
 
+def _has_live_scene_context(scene_context: str = "") -> bool:
+    cleaned = (scene_context or "").strip()
+    return bool(cleaned and cleaned.lower() not in {"[no scene context available]", "no scene context available"})
+
+
+def _token_count(text: str) -> int:
+    return len(re.findall(r"[a-zA-Z0-9_']+", text or ""))
+
+
+def _is_live_scene_observation_prompt(prompt: str, scene_context: str = "") -> bool:
+    if not _has_live_scene_context(scene_context):
+        return False
+    if is_explicit_web_lookup_request(prompt):
+        return False
+    lower = (prompt or "").lower()
+    scene_lower = (scene_context or "").lower()
+    if not lower.strip():
+        return False
+
+    local_reference_terms = (
+        "this",
+        "that",
+        "it",
+        "here",
+        "there",
+        "my",
+        "current",
+        "selected",
+        "screen",
+        "screenshot",
+        "viewport",
+        "setup",
+        "node",
+        "nodes",
+        "compositor",
+        "properties",
+        "right side",
+        "left side",
+    )
+    observation_terms = (
+        "see",
+        "look",
+        "visible",
+        "showing",
+        "shown",
+        "says",
+        "on screen",
+        "do i have",
+        "is there",
+        "where",
+    )
+    correction_terms = (
+        "don't see",
+        "dont see",
+        "do not see",
+        "can't see",
+        "cant see",
+        "cannot see",
+        "nothing says",
+        "there is no",
+        "there's no",
+        "not there",
+        "wrong",
+        "you said",
+    )
+    node_or_ui_terms = (
+        "node",
+        "nodes",
+        "glare",
+        "blur",
+        "mix",
+        "bloom",
+        "threshold",
+        "streaks",
+        "fog glow",
+        "button",
+        "slider",
+        "dropdown",
+        "setting",
+        "panel",
+        "render layers",
+        "viewer",
+        "group output",
+    )
+    score = 0
+    if any(term in lower for term in local_reference_terms):
+        score += 2
+    if any(term in lower for term in observation_terms):
+        score += 2
+    if any(term in lower for term in correction_terms):
+        score += 3
+    if "node/editor context:" in scene_lower and any(term in lower for term in node_or_ui_terms):
+        score += 3
+    if _token_count(prompt) <= 8 and any(term in lower for term in ("see", "look", "wrong", "there", "this", "that", "it")):
+        score += 2
+    if classify_router(prompt, scene_context).get("selectedRoute") == "visual_evaluation":
+        score += 2
+    return score >= 3
+
+
+def _prompt_source_scope(prompt: str, scene_context: str = "") -> str:
+    """Classify where the answer should be grounded before retrieving references."""
+
+    lower = (prompt or "").lower()
+    if is_explicit_web_lookup_request(prompt):
+        return "explicit_web"
+    if _is_live_scene_observation_prompt(prompt, scene_context):
+        return "live_scene"
+    if _is_probably_blender_question(prompt, scene_context):
+        return "blender_knowledge"
+    if _has_live_scene_context(scene_context) and _token_count(prompt) <= 6 and any(
+        term in lower
+        for term in (
+            "this",
+            "that",
+            "it",
+            "here",
+            "there",
+            "screen",
+            "selected",
+            "what now",
+            "why",
+            "wrong",
+        )
+    ):
+        return "live_scene"
+    return "external"
+
+
 def is_explicit_web_lookup_request(prompt: str) -> bool:
     lower = (prompt or "").lower()
     return any(
         phrase in lower
         for phrase in (
             "go look",
+            "look up",
+            "lookup",
             "look online",
             "look it up",
             "look this up",
@@ -1930,7 +2078,12 @@ def _is_troubleshooting_or_howto(prompt: str) -> bool:
 def _should_attempt_web(prompt: str, refs: list[dict[str, Any]], mode: str, scene_context: str = "") -> bool:
     if mode != KNOWLEDGE_MODE_LOCAL_AUTO_WEB:
         return False
-    if not _is_probably_blender_question(prompt, scene_context):
+    source_scope = _prompt_source_scope(prompt, scene_context)
+    if source_scope == "live_scene":
+        return False
+    if source_scope == "external":
+        return True
+    if source_scope == "explicit_web":
         return True
     if not _is_troubleshooting_or_howto(prompt) and not _is_version_or_stale_sensitive(prompt):
         return False
@@ -1996,10 +2149,12 @@ def _fetch_web_references(
     allow_default_web: bool,
     web_approved: bool = False,
 ) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
+    source_scope = _prompt_source_scope(prompt, scene_context)
     web_meta: dict[str, Any] = {
         "attemptedQueries": [],
         "usedQueries": [],
         "skippedResults": 0,
+        "sourceScope": source_scope,
     }
     if mode == KNOWLEDGE_MODE_LOCAL_ONLY:
         return [], "Web lookup skipped: Knowledge Mode is Local Only.", web_meta
@@ -2048,9 +2203,9 @@ def _fetch_web_references(
             continue
 
     should_broad_search = (
-        web_approved
-        or is_explicit_web_lookup_request(prompt)
-        or (mode == KNOWLEDGE_MODE_LOCAL_AUTO_WEB and not _is_probably_blender_question(prompt, scene_context))
+        source_scope == "explicit_web"
+        or (web_approved and source_scope != "live_scene")
+        or (mode == KNOWLEDGE_MODE_LOCAL_AUTO_WEB and source_scope == "external")
     )
     if not web_refs and allow_default_web and should_broad_search:
         blender_question = _is_probably_blender_question(prompt, scene_context)
@@ -2160,6 +2315,16 @@ def build_semantic_scene_card(
         "Evaluated mesh:",
         "Material",
         "Modifier stack:",
+        "Node/editor context:",
+        "Visible Blender editors:",
+        "Render and display settings:",
+        "Scene compositor node tree:",
+        "Visible node editor",
+        "Material node tree",
+        "Geometry node tree",
+        "Active node:",
+        "Nodes:",
+        "Links:",
         "- ",
     )
     collected = 0
@@ -2206,6 +2371,8 @@ def build_read_only_verification_notes(
         lines.append(f"Live Blender version available: {version}. This beats older model memory.")
     else:
         lines.append("No live Blender version found in runtime facts; avoid exact version claims unless the user stated a version.")
+    if _prompt_source_scope(prompt, scene_context) == "live_scene":
+        lines.append("Live-screen source check: answer from the provided Blender scene/screenshot context first. Do not use web results to identify what is currently on the user's screen.")
     if _scene_context_has_non_unit_scale(scene_context) and _contains_keyword(prompt.lower(), "bevel"):
         lines.append("Bevel-related check: selected scene data includes non-unit scale, so verify/apply scale before judging bevel settings.")
     if any(
@@ -2276,6 +2443,7 @@ def retrieve_knowledge(
         allow_default_web=allow_default_web,
         web_approved=web_approved or is_explicit_web_lookup_request(prompt),
     )
+    prompt_source_scope = str(web_meta.get("sourceScope") or _prompt_source_scope(prompt, scene_context))
     knowledge_references = format_knowledge_references(
         local_refs,
         timestamp=timestamp,
@@ -2381,6 +2549,7 @@ def retrieve_knowledge(
             ],
             "cardsStatus": veteran_cards_status(),
             "webDecision": web_status,
+            "promptSourceScope": prompt_source_scope,
             "webSearchQueries": web_meta.get("attemptedQueries", []),
             "webSearchUsedQueries": web_meta.get("usedQueries", []),
         },
@@ -2389,6 +2558,7 @@ def retrieve_knowledge(
             "modeLabel": knowledge_mode_label(mode),
             "docsIndexStatus": docs_index_status(runtime_facts),
             "lastWebLookupStatus": web_status,
+            "promptSourceScope": prompt_source_scope,
             "webSearchQueries": web_meta.get("attemptedQueries", []),
             "webSearchUsedQueries": web_meta.get("usedQueries", []),
             "sourceUrls": source_urls,

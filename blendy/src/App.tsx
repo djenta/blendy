@@ -756,7 +756,7 @@ function App() {
         <div className="brand">
           <img className="brand-logo" src={logoUrl} alt="" />
           <div>
-            <div className="brand-name">Blendy 1.0.4</div>
+            <div className="brand-name">Blendy 1.0.5</div>
             <div className="brand-subtitle">
               {page === "settings" ? "Settings" : latestDone ? "Done" : isGenerating ? "Reading Blender..." : "Local Blender Tutor"}
             </div>

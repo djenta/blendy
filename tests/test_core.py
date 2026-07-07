@@ -136,6 +136,7 @@ class CoreTests(unittest.TestCase):
         self.assertIn("I'm inferring", core.SYSTEM_PROMPT)
         self.assertIn("I can't tell from the current Blendy context", core.SYSTEM_PROMPT)
         self.assertIn("For node editor questions, trust the live node context inventory", core.SYSTEM_PROMPT)
+        self.assertIn("Web results cannot see the user's current Blender screen", core.SYSTEM_PROMPT)
         self.assertIn("startup defaults, preferences, future new files, or general app behavior", core.SYSTEM_PROMPT)
         self.assertIn("Name the Blender mode, tool/menu/operator", core.SYSTEM_PROMPT)
         self.assertIn("direct answer first", core.SYSTEM_PROMPT)
@@ -475,6 +476,39 @@ class CoreTests(unittest.TestCase):
         self.assertIn("https://example.com/sample-edge-workflow", knowledge["web_references"])
         self.assertIn("general web search result", knowledge["web_references"])
 
+    def test_live_screen_observation_prompts_do_not_auto_web_search(self) -> None:
+        def fake_searcher(query: str) -> list[dict[str, str]]:
+            raise AssertionError(f"Live Blender screen questions should not web search: {query}")
+
+        scene_context = (
+            "Node/editor context:\n"
+            "Scene compositor node tree: Compositor Nodetree\n"
+            "Nodes:\n"
+            "- Glare; type=Glare (CompositorNodeGlare); settings: glare_type=BLOOM, quality=MEDIUM\n"
+            "- Viewer; type=Viewer (CompositorNodeViewer)\n"
+            "Links:\n"
+            "- Render Layers.Image -> Glare.Image\n"
+            "- Glare.Glare -> Viewer.Image\n"
+        )
+
+        for prompt in ("What do you see?", "i dont see a blur"):
+            with self.subTest(prompt=prompt):
+                knowledge = core.retrieve_knowledge(
+                    prompt=prompt,
+                    scene_context=scene_context,
+                    runtime_facts="Blender version: 5.0.1",
+                    knowledge_mode=core.KNOWLEDGE_MODE_LOCAL_AUTO_WEB,
+                    web_searcher=fake_searcher,
+                    allow_default_web=True,
+                )
+
+                self.assertIn("Web lookup not needed", knowledge["web_references"])
+                self.assertEqual(knowledge["knowledge_status"]["promptSourceScope"], "live_scene")
+                self.assertEqual(knowledge["knowledge_status"]["webSearchQueries"], [])
+                self.assertIn("Node/editor context", knowledge["semantic_scene_card"])
+                self.assertIn("Glare", knowledge["semantic_scene_card"])
+                self.assertIn("Live-screen source check", knowledge["verification_notes"])
+
     def test_non_blender_question_skips_blender_docs_and_searches_topic(self) -> None:
         seen_queries: list[str] = []
 
@@ -500,6 +534,32 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(seen_queries, ["Sample Edge"])
         self.assertIn("no local official docs matched", knowledge["knowledge_references"])
         self.assertIn("https://example.com/sample-edge-profile", knowledge["web_references"])
+
+    def test_short_external_question_does_not_become_live_scene_scope(self) -> None:
+        seen_queries: list[str] = []
+
+        def fake_searcher(query: str) -> list[dict[str, str]]:
+            seen_queries.append(query)
+            return [
+                {
+                    "title": "Weather sample",
+                    "url": "https://example.com/weather-sample",
+                    "snippet": "Weather today sample result.",
+                }
+            ]
+
+        knowledge = core.retrieve_knowledge(
+            prompt="weather today",
+            scene_context="Active object: Cube",
+            runtime_facts="Blender version: 5.0.1",
+            knowledge_mode=core.KNOWLEDGE_MODE_LOCAL_AUTO_WEB,
+            web_searcher=fake_searcher,
+            allow_default_web=True,
+        )
+
+        self.assertEqual(knowledge["knowledge_status"]["promptSourceScope"], "external")
+        self.assertEqual(seen_queries, ["weather today"])
+        self.assertIn("https://example.com/weather-sample", knowledge["web_references"])
 
     def test_non_blender_lookup_ignores_active_scene_context(self) -> None:
         seen_queries: list[str] = []

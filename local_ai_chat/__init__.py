@@ -1473,7 +1473,7 @@ if bpy is not None:
 
 
     class _BlendyBridgeHandler(BaseHTTPRequestHandler):
-        server_version = "BlendyBridge/1.0.4"
+        server_version = "BlendyBridge/1.0.5"
 
         def log_message(self, format: str, *args: Any) -> None:
             return None
