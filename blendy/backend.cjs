@@ -9,6 +9,7 @@ const DEFAULT_CONTEXT_LIMIT_TOKENS = 70000;
 const DEFAULT_AUTO_COMPACT_RATIO = 0.95;
 const DEFAULT_TOOL_RESERVE_TOKENS = 3500;
 const DEFAULT_IMAGE_RESERVE_TOKENS = 1200;
+const MAX_USER_INSTRUCTIONS_CHARS = 6000;
 const MAX_TOOL_ROUNDS = 4;
 const MAX_TOOL_RESULT_CHARS = 6000;
 const AUTO_BRIDGE_URL = "auto";
@@ -148,8 +149,20 @@ function defaultSettings() {
     responseMaxTokens: DEFAULT_RESPONSE_MAX_TOKENS,
     contextLimitTokens: DEFAULT_CONTEXT_LIMIT_TOKENS,
     toolUse: TOOL_USE_AUTO,
+    userInstructions: "",
     knowledgeMode: KNOWLEDGE_MODE_LOCAL_AUTO_WEB,
   };
+}
+
+function normalizedUserInstructions(settings = {}) {
+  const text = String(settings.userInstructions || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .trim();
+  if (text.length <= MAX_USER_INSTRUCTIONS_CHARS) {
+    return text;
+  }
+  return `${text.slice(0, MAX_USER_INSTRUCTIONS_CHARS - 14)}\n[truncated]`;
 }
 
 function normalizeToolUse(value) {
@@ -426,6 +439,23 @@ function contextStatus(tokens, limit) {
     return "WARN";
   }
   return "OK";
+}
+
+function shouldReserveImageTokens(prompt, context) {
+  if (context?.screenshotDataUrl || context?.used?.screenshot) {
+    return true;
+  }
+  if (String(prompt || "").trim()) {
+    return true;
+  }
+  if (!context?.ok) {
+    return false;
+  }
+  const visual = String(context.visual || "").toLowerCase();
+  if (visual.includes("failed") || visual.includes("not captured")) {
+    return false;
+  }
+  return true;
 }
 
 function autoCompactThreshold(settings) {
@@ -715,7 +745,7 @@ async function runBlendyToolCall(toolCall) {
 function estimateContextUsage({ prompt = "", context, chat, settings, extraMessages = [] }) {
   const limit = Math.max(1000, Number(settings.contextLimitTokens || DEFAULT_CONTEXT_LIMIT_TOKENS));
   const toolsEnabled = toolUseEnabled(settings);
-  const contextText = buildContextText(prompt, context, chat.compactedSummary || "", { includeRetrieval: false });
+  const contextText = buildContextText(prompt, context, chat.compactedSummary || "", { includeRetrieval: false, settings });
   const systemPrompt = context.promptParts?.system_prompt || SYSTEM_PROMPT;
   const historyText = trimHistory(chat.messages)
     .map((message) => `${message.role}: ${message.content}`)
@@ -728,7 +758,7 @@ function estimateContextUsage({ prompt = "", context, chat, settings, extraMessa
   const promptTokens = estimateTokens(prompt);
   const toolDefinitionTokenCount = toolsEnabled ? toolDefinitionTokens() : 0;
   const toolReserveTokens = toolsEnabled ? DEFAULT_TOOL_RESERVE_TOKENS : 0;
-  const imageReserveTokens = context.screenshotDataUrl ? DEFAULT_IMAGE_RESERVE_TOKENS : 0;
+  const imageReserveTokens = shouldReserveImageTokens(prompt, context) ? DEFAULT_IMAGE_RESERVE_TOKENS : 0;
   const toolRuntimeTokens = estimateTokens(extraText);
   const tokens = baselineTokens + historyTokens + toolDefinitionTokenCount + toolReserveTokens + imageReserveTokens + toolRuntimeTokens;
   return {
@@ -1548,6 +1578,7 @@ function blenderVersionLock(prompt, context) {
 
 function buildContextText(prompt, context, compactedSummary, options = {}) {
   const includeRetrieval = options.includeRetrieval === true;
+  const userInstructions = normalizedUserInstructions(options.settings || {});
   const parts = context.promptParts || {};
   if (includeRetrieval && typeof parts.context_text === "string" && parts.context_text.trim()) {
     return injectCompactedSummary(parts.context_text, compactedSummary);
@@ -1566,6 +1597,9 @@ ${prompt.trim()}
 
 TOOL USE
 Read-only tools are available when you need Blender docs, workflow notes, web search, or a fetched HTTPS page. Do not claim you used a source unless a tool result is present in this conversation.
+
+USER INSTRUCTIONS
+${userInstructions || "[no user instructions saved]"}
 
 BLENDER VERSION LOCK
 ${blenderVersionLock(prompt, context)}
@@ -1609,7 +1643,7 @@ function injectCompactedSummary(contextText, compactedSummary) {
 }
 
 function buildChatPayload({ prompt, context, chat, settings, includeTools = true }) {
-  const contextText = buildContextText(prompt, context, chat.compactedSummary || "", { includeRetrieval: false });
+  const contextText = buildContextText(prompt, context, chat.compactedSummary || "", { includeRetrieval: false, settings });
   const userContent = context.screenshotDataUrl
     ? [
         { type: "text", text: contextText },

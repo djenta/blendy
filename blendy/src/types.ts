@@ -15,6 +15,7 @@ export interface BackendSettings {
   responseMaxTokens: number;
   contextLimitTokens: number;
   toolUse: ToolUseMode;
+  userInstructions: string;
   knowledgeMode: KnowledgeMode;
 }
 

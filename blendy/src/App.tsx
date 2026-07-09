@@ -49,6 +49,7 @@ const defaultBackendSettings: BackendSettings = {
   responseMaxTokens: 8000,
   contextLimitTokens: 70000,
   toolUse: "AUTO",
+  userInstructions: "",
   knowledgeMode: "LOCAL_AUTO_WEB",
 };
 
@@ -1272,6 +1273,19 @@ function SettingsPage({
           onChange={(toolUse) => updateBackendSettings({ toolUse: toolUse as ToolUseMode })}
         />
         <p className="setting-note">Blendy lets the local model request docs, workflow notes, and web lookup tools when needed.</p>
+      </SettingsGroup>
+
+      <SettingsGroup title="Instructions">
+        <label className="text-setting instruction-setting">
+          <span>About you</span>
+          <textarea
+            value={backendSettings.userInstructions || ""}
+            maxLength={6000}
+            placeholder="Example: I am a complete Blender beginner. I have made simple beveled product shapes before. Explain one step at a time and assume I may not know where tools live."
+            onChange={(event) => updateBackendSettings({ userInstructions: event.target.value })}
+          />
+        </label>
+        <p className="setting-note">Saved here is included with every prompt as background about your skill level, past projects, and preferred teaching style.</p>
       </SettingsGroup>
 
       <SettingsGroup title="LM Studio">

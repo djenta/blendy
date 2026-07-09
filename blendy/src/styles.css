@@ -1128,7 +1128,8 @@ button {
   font-weight: 590;
 }
 
-.text-setting input {
+.text-setting input,
+.text-setting textarea {
   min-width: 0;
   width: 100%;
   border: 1px solid var(--border);
@@ -1141,12 +1142,28 @@ button {
   line-height: 1.25;
 }
 
-.text-setting input:focus {
+.text-setting textarea {
+  min-height: 112px;
+  resize: vertical;
+  line-height: 1.4;
+}
+
+.instruction-setting {
+  align-items: start;
+}
+
+.instruction-setting > span {
+  padding-top: 8px;
+}
+
+.text-setting input:focus,
+.text-setting textarea:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
-[data-theme="sprint"] .text-setting input:focus {
+[data-theme="sprint"] .text-setting input:focus,
+[data-theme="sprint"] .text-setting textarea:focus {
   border-color: var(--green);
 }
 

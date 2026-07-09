@@ -17,6 +17,8 @@ assert(
 );
 assert(appSource.includes("confirmingDeleteChatId"), "Delete chat should use explicit in-app confirmation state.");
 assert(appSource.includes('label="Tool use"'), "Settings should expose Tool Use instead of old Auto Web routing.");
+assert(appSource.includes('title="Instructions"'), "Settings should include a user instructions panel.");
+assert(appSource.includes("userInstructions"), "Settings should persist user instructions through backend settings.");
 assert(appSource.includes("toolDefinitionTokens"), "Context UI should show tool definition/reserve accounting.");
 assert(appSource.includes("imageReserveTokens"), "Context UI should show screenshot reserve accounting.");
 assert(

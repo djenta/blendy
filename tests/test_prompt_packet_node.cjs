@@ -118,13 +118,19 @@ const bridgedPayload = buildChatPayload({
   prompt: "Where should this attach?",
   context: bridgedContext,
   chat: bridgedChat,
-  settings: { model: "gemma-test", responseMaxTokens: 8000 },
+  settings: {
+    model: "gemma-test",
+    responseMaxTokens: 8000,
+    userInstructions: "I am a beginner and I have made simple beveled product shapes before.",
+  },
 });
 
 assert(bridgedPayload.messages[0].content.includes("PYTHON SYSTEM PROMPT"));
 assert(!bridgedPayload.messages[0].content.includes("You are Blendy"));
 assert(!bridgedPayload.messages.at(-1).content.includes("Bridge-built context"));
 assert(bridgedPayload.messages.at(-1).content.includes("TOOL USE"));
+assert(bridgedPayload.messages.at(-1).content.includes("USER INSTRUCTIONS"));
+assert(bridgedPayload.messages.at(-1).content.includes("I am a beginner"));
 assert(bridgedPayload.messages.at(-1).content.includes("Remember that the user named the small part a connector."));
 assert(Array.isArray(bridgedPayload.tools));
 assert(bridgedPayload.tools.some((tool) => tool.function.name === "web_search"));
@@ -149,6 +155,48 @@ assert(usageWithToolsAndScreenshot.toolDefinitionTokens > 0);
 assert(usageWithToolsAndScreenshot.toolReserveTokens > 0);
 assert(usageWithToolsAndScreenshot.imageReserveTokens > 0);
 assert(usageWithToolsAndScreenshot.availableForConversationTokens > 0);
+
+const usageWithOmittedScreenshotBytes = estimateContextUsage({
+  prompt: "take a look",
+  context: {
+    ...bridgedContext,
+    ok: true,
+    screenshotDataUrl: "",
+    used: { screenshot: true },
+    visual: "Blender screen captured",
+  },
+  chat: bridgedChat,
+  settings: { contextLimitTokens: 70000, toolUse: "AUTO" },
+});
+assert(usageWithOmittedScreenshotBytes.imageReserveTokens > 0);
+
+const usageForNextVisualPrompt = estimateContextUsage({
+  prompt: "",
+  context: {
+    ...bridgedContext,
+    ok: true,
+    screenshotDataUrl: "",
+    used: { screenshot: false },
+    visual: "Viewport status available",
+  },
+  chat: bridgedChat,
+  settings: { contextLimitTokens: 70000, toolUse: "AUTO" },
+});
+assert(usageForNextVisualPrompt.imageReserveTokens > 0);
+
+const usageWithoutBridgeVisual = estimateContextUsage({
+  prompt: "",
+  context: {
+    ...bridgedContext,
+    ok: false,
+    screenshotDataUrl: "",
+    used: { screenshot: false },
+    visual: "Blender screen not captured",
+  },
+  chat: bridgedChat,
+  settings: { contextLimitTokens: 70000, toolUse: "AUTO" },
+});
+assert.strictEqual(usageWithoutBridgeVisual.imageReserveTokens, 0);
 assert.strictEqual(shouldSendScreenshot("Explain modifiers", "auto"), true);
 assert.strictEqual(shouldSendScreenshot("ive done everything you said, its not working", "auto"), true);
 assert.strictEqual(shouldSendScreenshot("", "auto"), false);
