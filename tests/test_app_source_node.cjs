@@ -16,6 +16,13 @@ assert(
   "Delete chat should use an in-app confirmation, not a native modal that can break Electron focus.",
 );
 assert(appSource.includes("confirmingDeleteChatId"), "Delete chat should use explicit in-app confirmation state.");
+assert(appSource.includes('label="Tool use"'), "Settings should expose Tool Use instead of old Auto Web routing.");
+assert(appSource.includes("toolDefinitionTokens"), "Context UI should show tool definition/reserve accounting.");
+assert(appSource.includes("imageReserveTokens"), "Context UI should show screenshot reserve accounting.");
+assert(
+  !appSource.includes("Auto Web can fetch docs"),
+  "Settings copy should not describe old pre-answer Auto Web fetching.",
+);
 
 const deleteChatMatch = appSource.match(/async function deleteChat[\s\S]*?async function captureViewport/);
 assert(deleteChatMatch, "deleteChat function should be present.");

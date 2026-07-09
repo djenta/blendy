@@ -8,7 +8,7 @@ const repoRoot = path.resolve(__dirname, "..");
 const backendPath = path.join(repoRoot, "blendy", "electron", "backend.cjs");
 const backendSource =
   fs.readFileSync(backendPath, "utf8") +
-  "\nmodule.exports.__test__ = { writePromptPacket, sanitizePromptPacketMessages, cleanModelText, buildChatPayload, buildContextText, assistantContextLine, assistantReceipt, resolveWebApproval, pendingWebLookupPrompt, bridgeHonoredWebApproval, staleBridgeWebApprovalMessage };\n";
+  "\nmodule.exports.__test__ = { writePromptPacket, sanitizePromptPacketMessages, cleanModelText, buildChatPayload, buildContextText, estimateContextUsage, runLmStudioCompletionWithTools, assistantContextLine, assistantReceipt, resolveWebApproval, pendingWebLookupPrompt, bridgeHonoredWebApproval, staleBridgeWebApprovalMessage, shouldSendScreenshot };\n";
 
 const sandbox = {
   require,
@@ -30,12 +30,15 @@ const {
   cleanModelText,
   buildChatPayload,
   buildContextText,
+  estimateContextUsage,
+  runLmStudioCompletionWithTools,
   assistantContextLine,
   assistantReceipt,
   resolveWebApproval,
   pendingWebLookupPrompt,
   bridgeHonoredWebApproval,
   staleBridgeWebApprovalMessage,
+  shouldSendScreenshot,
 } = sandbox.module.exports.__test__;
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "blendy-packet-"));
 const packetPath = path.join(tempDir, "prompt-packet.json");
@@ -66,7 +69,7 @@ writePromptPacket(packetPath, {
       {
         role: "user",
         content: [
-          { type: "text", text: "ROUTER DECISION\nSelected route: troubleshooting" },
+          { type: "text", text: "TOOL USE\nRead-only tools are available." },
           {
             type: "image_url",
             image_url: { url: "data:image/png;base64,SCREENSHOT_SHOULD_NOT_BE_WRITTEN" },
@@ -83,7 +86,9 @@ const packetText = JSON.stringify(packet);
 assert.deepStrictEqual(packet.routerTrace, routerTrace);
 assert.deepStrictEqual(packet.selectedCards, ["Bevel Modifier Appears to Do Nothing"]);
 assert(!Object.prototype.hasOwnProperty.call(packet, "tutorStyle"));
-assert(packetText.includes("ROUTER DECISION"));
+assert(packetText.includes("TOOL USE"));
+assert.deepStrictEqual(packet.toolsOffered, []);
+assert(!packetText.includes("Selected route: troubleshooting"));
 assert(packetText.includes("[omitted Blender screen screenshot data]"));
 assert(!packetText.includes("SCREENSHOT_SHOULD_NOT_BE_WRITTEN"));
 assert(!packetText.includes("data:image/png;base64"));
@@ -118,8 +123,35 @@ const bridgedPayload = buildChatPayload({
 
 assert(bridgedPayload.messages[0].content.includes("PYTHON SYSTEM PROMPT"));
 assert(!bridgedPayload.messages[0].content.includes("You are Blendy"));
-assert(bridgedPayload.messages.at(-1).content.includes("Bridge-built context"));
+assert(!bridgedPayload.messages.at(-1).content.includes("Bridge-built context"));
+assert(bridgedPayload.messages.at(-1).content.includes("TOOL USE"));
 assert(bridgedPayload.messages.at(-1).content.includes("Remember that the user named the small part a connector."));
+assert(Array.isArray(bridgedPayload.tools));
+assert(bridgedPayload.tools.some((tool) => tool.function.name === "web_search"));
+assert.strictEqual(bridgedPayload.tool_choice, "auto");
+
+const toolOffPayload = buildChatPayload({
+  prompt: "Where should this attach?",
+  context: bridgedContext,
+  chat: bridgedChat,
+  settings: { model: "gemma-test", responseMaxTokens: 8000, toolUse: "OFF" },
+});
+assert(!Object.prototype.hasOwnProperty.call(toolOffPayload, "tools"));
+assert(!Object.prototype.hasOwnProperty.call(toolOffPayload, "tool_choice"));
+
+const usageWithToolsAndScreenshot = estimateContextUsage({
+  prompt: "Look at this",
+  context: { ...bridgedContext, screenshotDataUrl: "data:image/png;base64,abc" },
+  chat: bridgedChat,
+  settings: { contextLimitTokens: 70000, toolUse: "AUTO" },
+});
+assert(usageWithToolsAndScreenshot.toolDefinitionTokens > 0);
+assert(usageWithToolsAndScreenshot.toolReserveTokens > 0);
+assert(usageWithToolsAndScreenshot.imageReserveTokens > 0);
+assert(usageWithToolsAndScreenshot.availableForConversationTokens > 0);
+assert.strictEqual(shouldSendScreenshot("Explain modifiers", "auto"), true);
+assert.strictEqual(shouldSendScreenshot("ive done everything you said, its not working", "auto"), true);
+assert.strictEqual(shouldSendScreenshot("", "auto"), false);
 
 const receiptLine = assistantContextLine({
   used: { screenshot: true },
@@ -232,4 +264,98 @@ assert.strictEqual(bridgeHonoredWebApproval({ promptParts: {} }, yesApproval), f
 assert.strictEqual(bridgeHonoredWebApproval({ promptParts: { web_approved: true } }, yesApproval), true);
 assert(staleBridgeWebApprovalMessage().includes("did not search the web yet"));
 
-console.log("Prompt packet diagnostic test passed.");
+async function testToolCallLoop() {
+  const requests = [];
+  sandbox.fetch = async (url, options = {}) => {
+    if (String(url).endsWith("/models")) {
+      const data = { data: [{ id: "tool-model" }] };
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        text: async () => JSON.stringify(data),
+      };
+    }
+    const body = JSON.parse(options.body || "{}");
+    requests.push(body);
+    const isFirstChatCall = requests.length === 1;
+    const data = isFirstChatCall
+      ? {
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: "",
+                tool_calls: [
+                  {
+                    id: "call_1",
+                    type: "function",
+                    function: {
+                      name: "search_blender_docs",
+                      arguments: JSON.stringify({ query: "bevel modifier" }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }
+      : {
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: "Use the Bevel modifier, then check the Amount against your scene units.",
+              },
+            },
+          ],
+        };
+    return {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      json: async () => data,
+      text: async () => JSON.stringify(data),
+      headers: { get: () => "application/json" },
+    };
+  };
+
+  let streamed = "";
+  const finalText = await runLmStudioCompletionWithTools({
+    settings: {
+      lmStudioBaseUrl: "http://localhost:1234/v1",
+      model: "auto",
+      responseMaxTokens: 8000,
+      contextLimitTokens: 70000,
+      toolUse: "AUTO",
+    },
+    payload: buildChatPayload({
+      prompt: "How do I bevel this?",
+      context: bridgedContext,
+      chat: { compactedSummary: "", messages: [] },
+      settings: { model: "auto", responseMaxTokens: 8000, toolUse: "AUTO" },
+    }),
+    prompt: "How do I bevel this?",
+    context: bridgedContext,
+    chat: { compactedSummary: "", messages: [] },
+    onDelta(delta) {
+      streamed += delta;
+    },
+  });
+
+  assert.strictEqual(requests.length, 2);
+  assert(Array.isArray(requests[0].tools));
+  assert.strictEqual(requests[0].tool_choice, "auto");
+  assert(requests[1].messages.some((message) => message.role === "tool" && message.name === "search_blender_docs"));
+  assert(finalText.includes("Bevel modifier"));
+  assert(streamed.includes("Bevel modifier"));
+}
+
+testToolCallLoop()
+  .then(() => {
+    console.log("Prompt packet diagnostic test passed.");
+  })
+  .catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });

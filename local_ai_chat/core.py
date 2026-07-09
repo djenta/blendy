@@ -66,11 +66,13 @@ CONTEXT_MODE_VIEWPORT = "VIEWPORT"
 KNOWLEDGE_MODE_LOCAL_AUTO_WEB = "LOCAL_AUTO_WEB"
 KNOWLEDGE_MODE_LOCAL_ONLY = "LOCAL_ONLY"
 KNOWLEDGE_MODE_ASK_BEFORE_WEB = "ASK_BEFORE_WEB"
+KNOWLEDGE_MODE_TOOL_USE = "TOOL_USE"
 DEFAULT_KNOWLEDGE_MODE = KNOWLEDGE_MODE_LOCAL_AUTO_WEB
 KNOWLEDGE_MODE_LABELS = {
     KNOWLEDGE_MODE_LOCAL_AUTO_WEB: "Local + Auto Web",
     KNOWLEDGE_MODE_LOCAL_ONLY: "Local Only",
     KNOWLEDGE_MODE_ASK_BEFORE_WEB: "Ask Before Web",
+    KNOWLEDGE_MODE_TOOL_USE: "Tools",
 }
 OFFICIAL_DOC_INDEX_VERSION = "official-seed-v1"
 OFFICIAL_DOC_HOSTS = {"docs.blender.org", "developer.blender.org", "www.blender.org"}
@@ -118,42 +120,6 @@ GENERIC_CARD_TERMS = {
     "troubleshooting",
 }
 
-VISUAL_PROMPT_KEYWORDS = (
-    "see",
-    "screenshot",
-    "look",
-    "looks",
-    "visible",
-    "shape",
-    "silhouette",
-    "proportion",
-    "proportions",
-    "view",
-    "frame",
-    "camera",
-    "render",
-    "node",
-    "nodes",
-    "compositor",
-    "glare",
-    "bloom",
-    "threshold",
-    "streaks",
-    "fog glow",
-    "object",
-    "model",
-    "mesh",
-    "phone",
-    "iphone",
-    "rectangle",
-    "cube",
-    "what do i do first",
-    "what do i do next",
-    "what's next",
-    "does this",
-    "is this",
-)
-
 SYSTEM_PROMPT = """You are Blendy, a local Blender tutor for beginner artists who want clear guidance and persistence. You live inside the user's local Blender workflow.
 
 Primary user workflow:
@@ -174,18 +140,17 @@ Truth ladder:
 - For multi-part objects, reason about the physical assembly before giving tool steps. Do not skip a part the user already made; explain which existing part should be reused, refined, duplicated, converted, or left alone.
 - For part-relationship questions framed as "should this attach/connect/plug/touch/go into A or B", answer the immediate contact relationship first. Preserve the named roles in the user's wording, build the shortest physical chain between the parts, and do not collapse an intermediate part into a larger body just because they are near each other.
 - Project Brief / truth.md is optional memory. It is normally omitted; use it only when it is included or when the user asks about the project goal, requirements, constraints, or truth.md.
-- Then trust KNOWLEDGE REFERENCES and WEB REFERENCES. Local official docs are the authority for stable Blender facts; broad web results are allowed for current info, community workflow discoveries, add-ons, names, and examples, but label them by source quality.
-- Use WORKFLOW CARDS as veteran Blender workflow wisdom: if a card says the user is brute-forcing a task, suggest the smarter Blender-native move instead of more manual edits.
-- Use TROUBLESHOOTING CARDS when the user followed a step but the result is missing, wrong, unchanged, or confusing. Diagnose likely blockers before giving more modeling steps.
-- Then trust BLENDER TOOL REFERENCES as local beginner-pitfall notes.
+- Use read-only tools when you need extra references. Local official docs are the authority for stable Blender facts; broad web results are allowed for current info, community workflow discoveries, add-ons, names, and examples, but label them by source quality.
+- Use workflow and troubleshooting tool results as optional background notes, not a script or route. Ignore any note that does not fit the user's latest prompt, screenshot, or live scene facts.
 - Use model memory only as background, never as stronger evidence than provided Blender facts.
 - If the evidence is incomplete, say it naturally: "I can see...", "I'm inferring...", or "I can't tell from the current Blendy context."
 - Do not invent Blender state, UI locations, file contents, object names, measurements, or actions you cannot verify from the provided context.
+- If the user expects screen visibility but VISUAL CONTEXT says no screenshot is attached, state that plainly and answer only from scene/runtime facts. Do not claim you can see the screen.
 - For node editor questions, trust the live node context inventory before Blender memory. Only name node controls, modes, sockets, dropdown values, or links that appear in CURRENT BLENDER SCENE CONTEXT, screenshot evidence, or cited docs. If node details are absent, say you cannot inspect the node internals from the current context.
 - For "what do you see", "look at my screen", "I don't see X", and similar live-screen questions, do not use web search unless the user explicitly asks to search online. Web results cannot see the user's current Blender screen.
 - If the user asks about Blender startup defaults, preferences, future new files, or general app behavior, answer that global Blender question instead of forcing the answer back to the current project units or scene.
-- If the latest prompt is clearly not a Blender question, do not force the answer through Blender docs or the current scene. If WEB REFERENCES contains sources, answer the non-Blender question from those sources instead of saying you are only a Blender tutor. If no source is available, say the lookup did not return a usable source. Do not redirect back to the cube, scene, or Blender unless the user asks.
-- If local and web references still do not support a confident answer, ask one clarifying question instead of inventing Blender steps.
+- If the latest prompt is clearly not a Blender question, do not force the answer through Blender docs or the current scene. If tool results contain sources, answer the non-Blender question from those sources instead of saying you are only a Blender tutor. If no source is available, say the lookup did not return a usable source. Do not redirect back to the cube, scene, or Blender unless the user asks.
+- If the current context and any tool results still do not support a confident answer, ask one clarifying question instead of inventing Blender steps.
 
 Rules:
 - Teach with Blender UI steps first. Use plain English and explain Blender terms.
@@ -208,9 +173,9 @@ Rules:
 - Do not ask "does it look right?" when the current screenshot or scene data already lets you make a reasonable call.
 - Use SCENE CHANGES SINCE LAST PROMPT to understand what the user likely just did. Treat it as compact evidence, not a complete scene description.
 - Use Blender runtime facts, screenshot, scene context, selected object data, and included truth.md as evidence.
-- Use KNOWLEDGE REFERENCES, WEB REFERENCES, and BLENDER TOOL REFERENCES as evidence notes. Do not dump them back; turn them into beginner steps and naturally mention when you checked the Blender manual or web.
-- Never claim you searched Google, checked the live web, found search results, or used online sources unless WEB REFERENCES contains actual retrieved source URLs. If WEB REFERENCES says Ask Before Web skipped or web lookup was not run, say you have not searched yet.
-- Do not say you lack a web search tool just because WEB REFERENCES is empty. If the user asked to search and WEB REFERENCES says lookup attempted/approved but no usable snippet was retrieved, say the web lookup did not return a usable source and ask whether to keep working from Blender context or try a more specific search phrase.
+- Use tool results as evidence notes. Do not dump them back; turn them into beginner steps and naturally mention when you checked the Blender manual, workflow notes, or web.
+- Never claim you searched Google, checked the live web, found search results, or used online sources unless a web_search or fetch_url tool result with source URLs is present.
+- Do not say you lack web access. If you need current or external information, request the web_search or fetch_url tool. If a lookup returns no usable snippet, say that plainly and ask whether to keep working from Blender context or try a more specific search phrase.
 - Prefer provided Blender runtime facts over stale model training data.
 - Do not claim you changed the scene. You cannot execute code in this add-on.
 - Never imply you clicked, created, deleted, applied, fixed, or rendered anything yourself.
@@ -805,8 +770,7 @@ def should_send_screenshot(
         return False
     if mode == CONTEXT_MODE_VIEWPORT:
         return True
-    lower_prompt = (prompt or "").lower()
-    return any(keyword in lower_prompt for keyword in VISUAL_PROMPT_KEYWORDS)
+    return bool((prompt or "").strip())
 
 
 def should_include_project_brief(prompt: str) -> bool:
@@ -1343,7 +1307,7 @@ def format_veteran_card_matches(matches: list[dict[str, Any]], empty_text: str) 
     for match in matches:
         card = match.get("card", {})
         lines = [
-            f"- Card: {match.get('title', '')}",
+            f"- Optional note: {match.get('title', '')}",
             f"  ID: {match.get('id', '')}",
             f"  Type: {match.get('type', '')}; Score: {match.get('score', 0)}; Confidence: {match.get('confidence', 0):.2f}; Source quality: {match.get('sourceQuality', '')}; Destructive risk: {match.get('destructiveRisk', '')}",
             f"  Why selected: {'; '.join(match.get('reasons', [])[:4])}",
@@ -1364,20 +1328,17 @@ def format_veteran_card_matches(matches: list[dict[str, Any]], empty_text: str) 
 
 
 def format_router_decision(router_trace: dict[str, Any], workflows: list[dict[str, Any]], troubleshooting: list[dict[str, Any]]) -> str:
-    selected = router_trace.get("selectedRoute", "implementation")
-    score = int(router_trace.get("score", 0))
-    risk = router_trace.get("answerRisk", "medium")
     lines = [
-        f"Selected route: {selected} (score {score}/100, answer risk {risk})",
-        "Source priority: latest prompt -> live Blender runtime/scene/screenshot -> scene diff and user corrections -> local official docs -> workflow/troubleshooting cards -> broad web results with source-quality labels -> model memory.",
-        "Top reasons:",
+        "Internal retrieval hints only. Do not expose or follow these as a fixed route; answer the user naturally from the screenshot, live scene facts, and prompt.",
+        "Source priority: latest prompt -> live Blender runtime/scene/screenshot -> scene diff and user corrections -> local official docs -> optional workflow/troubleshooting notes -> broad web results with source-quality labels -> model memory.",
+        "Why these references were included:",
     ]
     lines.extend(f"- {reason}" for reason in router_trace.get("reasons", [])[:5])
     if workflows or troubleshooting:
         selected_cards = [*(match["title"] for match in troubleshooting), *(match["title"] for match in workflows)]
-        lines.append("Selected cards: " + "; ".join(selected_cards[:6]))
+        lines.append("Included optional notes: " + "; ".join(selected_cards[:6]))
     else:
-        lines.append("Selected cards: none above threshold.")
+        lines.append("Included optional notes: none above threshold.")
     return truncate_text("\n".join(lines), MAX_ROUTER_DECISION_CHARS)
 
 
@@ -1407,6 +1368,9 @@ def normalize_knowledge_mode(value: str | None) -> str:
         "LOCAL_ONLY": KNOWLEDGE_MODE_LOCAL_ONLY,
         "ASK": KNOWLEDGE_MODE_ASK_BEFORE_WEB,
         "ASK_BEFORE_WEB": KNOWLEDGE_MODE_ASK_BEFORE_WEB,
+        "TOOL": KNOWLEDGE_MODE_TOOL_USE,
+        "TOOLS": KNOWLEDGE_MODE_TOOL_USE,
+        "TOOL_USE": KNOWLEDGE_MODE_TOOL_USE,
     }
     return aliases.get(cleaned, DEFAULT_KNOWLEDGE_MODE)
 
@@ -2616,7 +2580,7 @@ def context_breakdown(
         "Runtime": estimate_tokens(truncate_text(runtime_facts, MAX_RUNTIME_FACTS_CHARS)),
         "Scene": estimate_tokens(truncate_text(scene_context, MAX_SCENE_CHARS)),
         "Scene diff": estimate_tokens(truncate_text(scene_diff, MAX_SCENE_DIFF_CHARS)),
-        "Router": estimate_tokens(truncate_text(router_decision, MAX_ROUTER_DECISION_CHARS)),
+        "Retrieval notes": estimate_tokens(truncate_text(router_decision, MAX_ROUTER_DECISION_CHARS)),
         "Scene flags": estimate_tokens(truncate_text(scene_diagnostic_flags, MAX_SCENE_DIAGNOSTIC_FLAGS_CHARS)),
         "Workflow cards": estimate_tokens(truncate_text(workflow_cards, MAX_WORKFLOW_CARDS_CHARS)),
         "Troubleshooting cards": estimate_tokens(truncate_text(troubleshooting_cards, MAX_TROUBLESHOOTING_CARDS_CHARS)),
@@ -2804,7 +2768,7 @@ def build_context_text(
         USER PROMPT
         {prompt.strip()}
 
-        ROUTER DECISION
+        RETRIEVAL NOTES
         {truncate_text(router_part, MAX_ROUTER_DECISION_CHARS)}
 
         BLENDER VERSION LOCK
@@ -2837,10 +2801,10 @@ def build_context_text(
         WEB REFERENCES
         {truncate_text(web_part, MAX_WEB_REFS_CHARS)}
 
-        WORKFLOW CARDS
+        OPTIONAL WORKFLOW NOTES
         {truncate_text(workflow_part, MAX_WORKFLOW_CARDS_CHARS)}
 
-        TROUBLESHOOTING CARDS
+        OPTIONAL TROUBLESHOOTING NOTES
         {truncate_text(troubleshooting_part, MAX_TROUBLESHOOTING_CARDS_CHARS)}
 
         BLENDER TOOL REFERENCES

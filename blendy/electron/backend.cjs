@@ -7,7 +7,13 @@ const DEFAULT_LM_STUDIO_BASE_URL = "http://localhost:1234/v1";
 const DEFAULT_RESPONSE_MAX_TOKENS = 8000;
 const DEFAULT_CONTEXT_LIMIT_TOKENS = 70000;
 const DEFAULT_AUTO_COMPACT_RATIO = 0.95;
+const DEFAULT_TOOL_RESERVE_TOKENS = 3500;
+const DEFAULT_IMAGE_RESERVE_TOKENS = 1200;
+const MAX_TOOL_ROUNDS = 4;
+const MAX_TOOL_RESULT_CHARS = 6000;
 const AUTO_BRIDGE_URL = "auto";
+const TOOL_USE_AUTO = "AUTO";
+const TOOL_USE_OFF = "OFF";
 const KNOWLEDGE_MODE_LOCAL_AUTO_WEB = "LOCAL_AUTO_WEB";
 const KNOWLEDGE_MODE_LOCAL_ONLY = "LOCAL_ONLY";
 const KNOWLEDGE_MODE_ASK_BEFORE_WEB = "ASK_BEFORE_WEB";
@@ -33,42 +39,6 @@ const PROJECT_BRIEF_PROMPT_KEYWORDS = [
 const BLENDER_VERSION_RE = /\bBlender version:\s*([^\n\r]+)/i;
 const USER_STATED_BLENDER_VERSION_RE = /\bblender\s+([0-9]+(?:\.[0-9]+){0,2}(?:[-_a-zA-Z0-9.]*)?)/i;
 
-const VISUAL_PROMPT_KEYWORDS = [
-  "see",
-  "screenshot",
-  "look",
-  "looks",
-  "visible",
-  "shape",
-  "silhouette",
-  "proportion",
-  "proportions",
-  "view",
-  "frame",
-  "camera",
-  "render",
-  "node",
-  "nodes",
-  "compositor",
-  "glare",
-  "bloom",
-  "threshold",
-  "streaks",
-  "fog glow",
-  "object",
-  "model",
-  "mesh",
-  "phone",
-  "iphone",
-  "rectangle",
-  "cube",
-  "what do i do first",
-  "what do i do next",
-  "what's next",
-  "does this",
-  "is this",
-];
-
 const SYSTEM_PROMPT = `You are Blendy, a local Blender tutor for beginner artists who want clear guidance and persistence. You live inside the user's local Blender workflow.
 
 Primary user workflow:
@@ -87,18 +57,17 @@ Truth ladder:
 - For multi-part objects, reason about the physical assembly before giving tool steps. Do not skip a part the user already made; explain which existing part should be reused, refined, duplicated, converted, or left alone.
 - For part-relationship questions framed as "should this attach/connect/plug/touch/go into A or B", answer the immediate contact relationship first. Preserve the named roles in the user's wording, build the shortest physical chain between the parts, and do not collapse an intermediate part into a larger body just because they are near each other.
 - Project Brief / truth.md is optional memory. It is normally omitted; use it only when it is included or when the user asks about the project goal, requirements, constraints, or truth.md.
-- Then trust KNOWLEDGE REFERENCES and WEB REFERENCES. Local official docs are the authority for stable Blender facts; broad web results are allowed for current info, community workflow discoveries, add-ons, names, and examples, but label them by source quality.
-- Use WORKFLOW CARDS as veteran Blender workflow wisdom: if a card says the user is brute-forcing a task, suggest the smarter Blender-native move instead of more manual edits.
-- Use TROUBLESHOOTING CARDS when the user followed a step but the result is missing, wrong, unchanged, or confusing. Diagnose likely blockers before giving more modeling steps.
-- Then trust BLENDER TOOL REFERENCES as local beginner-pitfall notes.
+- Use read-only tools when you need extra references. Local official docs are the authority for stable Blender facts; web results are allowed for current info, community workflow discoveries, add-ons, names, and examples, but label them by source quality.
+- Use workflow and troubleshooting tool results as optional background notes, not a script or route. Ignore any note that does not fit the user's latest prompt, screenshot, or live scene facts.
 - Use model memory only as background, never as stronger evidence than provided Blender facts.
 - If the evidence is incomplete, say it naturally: "I can see...", "I'm inferring...", or "I can't tell from the current Blendy context."
 - Do not invent Blender state, UI locations, file contents, object names, measurements, or actions you cannot verify from the provided context.
+- If the user expects screen visibility but VISUAL CONTEXT says no screenshot is attached, state that plainly and answer only from scene/runtime facts. Do not claim you can see the screen.
 - For node editor questions, trust the live node context inventory before Blender memory. Only name node controls, modes, sockets, dropdown values, or links that appear in CURRENT BLENDER SCENE CONTEXT, screenshot evidence, or cited docs. If node details are absent, say you cannot inspect the node internals from the current context.
 - For "what do you see", "look at my screen", "I don't see X", and similar live-screen questions, do not use web search unless the user explicitly asks to search online. Web results cannot see the user's current Blender screen.
 - If the user asks about Blender startup defaults, preferences, future new files, or general app behavior, answer that global Blender question instead of forcing the answer back to the current project units or scene.
 - If the latest prompt is clearly not a Blender question, do not force the answer through Blender docs or the current scene. If WEB REFERENCES contains sources, answer the non-Blender question from those sources instead of saying you are only a Blender tutor. If no source is available, say the lookup did not return a usable source.
-- If local and web references still do not support a confident answer, ask one clarifying question instead of inventing Blender steps.
+- If the current context and any tool results still do not support a confident answer, ask one clarifying question instead of inventing Blender steps.
 
 Answer contract:
 - Give the direct answer first, then one small next step, then one simple check for whether it worked.
@@ -113,9 +82,9 @@ Answer contract:
 - Do not label sections "Goal", "Next tool", "Exact steps", "Check", or "If it looks wrong".
 - If the user asks whether something looks right, use the screenshot and scene context first.
 - Use Blender runtime facts, screenshot, scene context, selected object data, and included Project Brief as evidence.
-- Use KNOWLEDGE REFERENCES, WEB REFERENCES, and BLENDER TOOL REFERENCES as evidence notes. Do not dump them back; turn them into beginner steps and naturally mention when you checked the Blender manual or web.
-- Never claim you searched Google, checked the live web, found search results, or used online sources unless WEB REFERENCES contains actual retrieved source URLs. If WEB REFERENCES says Ask Before Web skipped or web lookup was not run, say you have not searched yet.
-- Do not say you lack a web search tool just because WEB REFERENCES is empty. If the user asked to search and WEB REFERENCES says lookup attempted/approved but no usable snippet was retrieved, say the web lookup did not return a usable source and ask whether to keep working from Blender context or try a more specific search phrase.
+- Use tool results as evidence notes. Do not dump them back; turn them into beginner steps and naturally mention when you checked the Blender manual, workflow notes, or web.
+- Never claim you searched Google, checked the live web, found search results, or used online sources unless a web_search or fetch_url tool result with source URLs is present.
+- Do not say you lack web access. If you need current or external information, request the web_search or fetch_url tool. If a lookup returns no usable snippet, say that plainly and ask whether to keep working from Blender context or try a more specific search phrase.
 - Do not claim you changed the scene. You cannot execute Blender actions.
 - Never imply you clicked, created, deleted, applied, fixed, or rendered anything yourself.
 - Do not provide Blender Python unless the user explicitly asks for code.
@@ -178,8 +147,180 @@ function defaultSettings() {
     model: "auto",
     responseMaxTokens: DEFAULT_RESPONSE_MAX_TOKENS,
     contextLimitTokens: DEFAULT_CONTEXT_LIMIT_TOKENS,
+    toolUse: TOOL_USE_AUTO,
     knowledgeMode: KNOWLEDGE_MODE_LOCAL_AUTO_WEB,
   };
+}
+
+function normalizeToolUse(value) {
+  const cleaned = String(value || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return cleaned === TOOL_USE_OFF ? TOOL_USE_OFF : TOOL_USE_AUTO;
+}
+
+function toolUseEnabled(settings = {}) {
+  return normalizeToolUse(settings.toolUse) !== TOOL_USE_OFF;
+}
+
+const LOCAL_BLENDER_DOCS = [
+  {
+    title: "Apply - Blender Manual",
+    url: "https://docs.blender.org/manual/en/latest/scene_layout/object/editing/apply.html",
+    keywords: ["apply scale", "ctrl a scale", "scale not 1", "transform apply", "bevel looks wrong"],
+    summary:
+      "Apply Scale makes Blender treat the object's current size as its normal transform basis. For modifier weirdness, check Object Mode, selected object, then Ctrl+A > Scale before judging the modifier.",
+  },
+  {
+    title: "Bevel Modifier - Blender Manual",
+    url: "https://docs.blender.org/manual/en/latest/modeling/modifiers/generate/bevel.html",
+    keywords: ["bevel modifier", "bevel does nothing", "round corners", "rounded edges", "chamfer", "segments", "clamp overlap"],
+    summary:
+      "The Bevel modifier bevels mesh edges non-destructively. If it appears to do nothing, verify selected mesh, viewport visibility, Amount relative to scene units, object scale, and Clamp Overlap.",
+  },
+  {
+    title: "Curve Geometry - Blender Manual",
+    url: "https://docs.blender.org/manual/en/latest/modeling/curves/properties/geometry.html",
+    keywords: ["curve bevel depth", "bevel depth", "cable", "wire", "cord", "hose", "bend", "flexible", "curved tube"],
+    summary:
+      "Curve objects can be given thickness through Geometry > Bevel Depth, making a smooth bent tube without many mesh loop cuts.",
+  },
+  {
+    title: "Inset Faces - Blender Manual",
+    url: "https://docs.blender.org/manual/en/latest/modeling/meshes/editing/face/inset_faces.html",
+    keywords: ["inset", "screen border", "panel", "rim", "face inside", "button recess", "port recess"],
+    summary:
+      "Inset Faces creates an inner border on selected faces, useful for panels, screens, rims, and recesses. Start in Edit Mode, Face Select, with the face selected.",
+  },
+  {
+    title: "Loop Cut and Slide - Blender Manual",
+    url: "https://docs.blender.org/manual/en/latest/modeling/meshes/editing/edge/loopcut_slide.html",
+    keywords: ["loop cut", "ctrl r", "support loop", "edge loop", "add segment", "topology"],
+    summary:
+      "Loop Cut and Slide adds edge loops through connected faces. It works best on clean quad topology and can stop early on triangles or n-gons.",
+  },
+  {
+    title: "Solidify Modifier - Blender Manual",
+    url: "https://docs.blender.org/manual/en/latest/modeling/modifiers/generate/solidify.html",
+    keywords: ["solidify", "thickness", "thin surface", "shell", "case", "wall thickness"],
+    summary: "Solidify adds thickness to surfaces and shells. For beginners, leave it as a modifier while tuning thickness.",
+  },
+  {
+    title: "Mirror Modifier - Blender Manual",
+    url: "https://docs.blender.org/manual/en/latest/modeling/modifiers/generate/mirror.html",
+    keywords: ["mirror", "symmetry", "symmetrical", "left and right", "both sides", "mirror line"],
+    summary: "Mirror uses the object's origin and chosen axes to repeat geometry. If the result is offset, check origin and axis first.",
+  },
+  {
+    title: "Object Origin - Blender Manual",
+    url: "https://docs.blender.org/manual/en/latest/scene_layout/object/origin.html",
+    keywords: ["origin", "pivot", "center point", "rotate around", "mirror line", "off center"],
+    summary:
+      "The object origin is the object's anchor for transforms and many modifiers; pivot settings control what point operations rotate or scale around.",
+  },
+  {
+    title: "Normals - Blender Manual",
+    url: "https://docs.blender.org/manual/en/latest/modeling/meshes/editing/mesh/normals.html",
+    keywords: ["normal", "normals", "inside out", "black face", "weird shading", "recalculate outside"],
+    summary:
+      "Normals are surface directions used for shading and visibility. If faces shade inconsistently, use Edit Mode, select all, Mesh > Normals > Recalculate Outside.",
+  },
+  {
+    title: "Shade Smooth and Flat - Blender Manual",
+    url: "https://docs.blender.org/manual/en/latest/scene_layout/object/editing/shading.html",
+    keywords: ["shade smooth", "shade flat", "faceted", "smooth shading", "sharp edges"],
+    summary:
+      "Shade Smooth changes how lighting is interpolated across faces; it does not add geometry. Crisp product edges may still need bevels or sharp normals.",
+  },
+  {
+    title: "Cameras - Blender Manual",
+    url: "https://docs.blender.org/manual/en/latest/render/cameras.html",
+    keywords: ["camera", "frame", "framing", "composition", "numpad 0", "product shot", "camera view"],
+    summary: "The camera defines what the render sees. Inspect camera view before rendering and frame important silhouettes cleanly.",
+  },
+  {
+    title: "Principled BSDF - Blender Manual",
+    url: "https://docs.blender.org/manual/en/latest/render/shader_nodes/shader/principled.html",
+    keywords: ["material", "principled", "bsdf", "color", "roughness", "metallic", "glass", "screen material"],
+    summary:
+      "Most beginner materials can start with the Principled BSDF controls: base color, metallic, roughness, alpha/transmission where available, then tune under actual lighting.",
+  },
+  {
+    title: "Blender Release Notes",
+    url: "https://developer.blender.org/docs/release_notes/",
+    keywords: ["version", "changed", "release notes", "new in blender", "deprecated", "ui changed"],
+    summary: "Version-sensitive claims should be checked against Blender release notes and the live runtime version instead of stale memory.",
+  },
+  {
+    title: "Blender Python API",
+    url: "https://docs.blender.org/api/current/index.html",
+    keywords: ["python", "script", "api", "bpy", "operator", "code"],
+    summary: "The Python API is the source for scripting details. Do not provide Blender Python unless the user explicitly asks for code.",
+  },
+];
+
+const BLENDY_TOOL_DEFINITIONS = [
+  {
+    type: "function",
+    function: {
+      name: "search_blender_docs",
+      description: "Search local official Blender documentation snippets for stable Blender UI, modifier, material, render, and API facts.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "The Blender topic to search for." },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "search_workflow_notes",
+      description: "Search Blendy's local workflow and troubleshooting notes for practical beginner modeling patterns and common failure modes.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "The workflow or troubleshooting situation to search for." },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "web_search",
+      description: "Search the public web for current, external, or non-local information. Use for latest releases, add-ons, names, and current facts.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "The web search query." },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "fetch_url",
+      description: "Fetch and summarize an HTTPS page. Use after web_search or when the user gives a specific URL.",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "An HTTPS URL to fetch." },
+        },
+        required: ["url"],
+      },
+    },
+  },
+];
+
+function toolDefinitionTokens() {
+  return estimateTokens(JSON.stringify(BLENDY_TOOL_DEFINITIONS));
 }
 
 function normalizeKnowledgeMode(value) {
@@ -292,17 +433,304 @@ function autoCompactThreshold(settings) {
   return Math.floor(limit * DEFAULT_AUTO_COMPACT_RATIO);
 }
 
-function estimateContextUsage({ prompt = "", context, chat, settings }) {
+function tokenizeQuery(query) {
+  return String(query || "")
+    .toLowerCase()
+    .match(/[a-z0-9][a-z0-9_-]{1,}/g) || [];
+}
+
+function scoreSearchText(query, text, keywords = []) {
+  const haystack = String(text || "").toLowerCase();
+  const queryTokens = tokenizeQuery(query);
+  let score = 0;
+  for (const token of queryTokens) {
+    if (haystack.includes(token)) {
+      score += 1;
+    }
+  }
+  for (const keyword of keywords) {
+    const clean = String(keyword || "").toLowerCase();
+    if (clean && haystack.includes(clean)) {
+      score += 2;
+    }
+    if (clean && String(query || "").toLowerCase().includes(clean)) {
+      score += 4;
+    }
+  }
+  return score;
+}
+
+function formatToolItems(items, emptyMessage) {
+  if (!items.length) {
+    return emptyMessage;
+  }
+  return items
+    .map((item, index) => {
+      const lines = [
+        `${index + 1}. ${item.title || "Untitled"}`,
+        item.url ? `Source: ${item.url}` : "",
+        item.authority ? `Authority: ${item.authority}` : "",
+        item.summary || item.notes || "",
+      ].filter(Boolean);
+      return lines.join("\n");
+    })
+    .join("\n\n");
+}
+
+function searchLocalBlenderDocs(query) {
+  const scored = LOCAL_BLENDER_DOCS
+    .map((entry) => ({
+      ...entry,
+      authority: "official Blender docs",
+      score: scoreSearchText(query, `${entry.title}\n${entry.summary}\n${entry.keywords.join(" ")}`, entry.keywords),
+    }))
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 5);
+  return formatToolItems(scored, "No local official Blender doc snippets matched that query.");
+}
+
+function workflowDataPaths() {
+  const candidates = [
+    path.join(__dirname, "..", "..", "local_ai_chat", "data"),
+    path.join(process.resourcesPath || "", "blender-addons", "local_ai_chat", "data"),
+  ];
+  return [...new Set(candidates)].filter(Boolean);
+}
+
+function readWorkflowCards() {
+  const cards = [];
+  for (const dir of workflowDataPaths()) {
+    for (const fileName of ["blendy_veteran_cards.json", "blendy_veteran_cards_expansion.json"]) {
+      const filePath = path.join(dir, fileName);
+      const data = readJson(filePath, null);
+      const rawCards = Array.isArray(data?.cards) ? data.cards : Array.isArray(data) ? data : [];
+      for (const card of rawCards) {
+        if (card && typeof card === "object") {
+          cards.push(card);
+        }
+      }
+    }
+    if (cards.length) {
+      break;
+    }
+  }
+  return cards;
+}
+
+function cardSearchText(card) {
+  return [
+    card.id,
+    card.title,
+    card.type,
+    card.better_move || card.betterMove,
+    card.diagnosis_order || card.diagnosisOrder,
+    card.beginner_steps,
+    card.notes,
+    ...(Array.isArray(card.likely_causes) ? card.likely_causes : []),
+    ...(Array.isArray(card.what_blendy_should_avoid) ? card.what_blendy_should_avoid : []),
+    ...(Array.isArray(card.triggers) ? card.triggers : []),
+    ...(Array.isArray(card.keywords) ? card.keywords : []),
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function searchWorkflowNotes(query) {
+  const scored = readWorkflowCards()
+    .map((card) => ({
+      title: card.title || card.id || "Workflow note",
+      authority: card.type === "troubleshooting" ? "local troubleshooting note" : "local workflow note",
+      summary:
+        card.better_move
+        || card.betterMove
+        || card.diagnosis_order
+        || card.diagnosisOrder
+        || card.beginner_steps
+        || card.notes
+        || "",
+      score: scoreSearchText(query, cardSearchText(card), [
+        ...(Array.isArray(card.triggers) ? card.triggers : []),
+        ...(Array.isArray(card.keywords) ? card.keywords : []),
+      ]),
+    }))
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 5);
+  return formatToolItems(scored, "No local workflow or troubleshooting notes matched that query.");
+}
+
+function stripHtml(raw) {
+  return String(raw || "")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function relevantSnippet(text, query, limit = 900) {
+  const clean = stripHtml(text);
+  if (clean.length <= limit) {
+    return clean;
+  }
+  const tokens = tokenizeQuery(query).filter((token) => token.length > 3);
+  const lower = clean.toLowerCase();
+  let index = -1;
+  for (const token of tokens) {
+    index = lower.indexOf(token);
+    if (index >= 0) {
+      break;
+    }
+  }
+  const start = Math.max(0, index < 0 ? 0 : index - Math.floor(limit / 3));
+  return `${start > 0 ? "..." : ""}${clean.slice(start, start + limit)}${start + limit < clean.length ? "..." : ""}`;
+}
+
+function assertHttpsUrl(url) {
+  let parsed;
+  try {
+    parsed = new URL(String(url || ""));
+  } catch (_error) {
+    throw new Error("URL must be a valid HTTPS URL.");
+  }
+  if (parsed.protocol !== "https:" || !parsed.hostname) {
+    throw new Error("Only HTTPS URLs can be fetched.");
+  }
+  return parsed.toString();
+}
+
+async function fetchUrlSnippet(url, query = "") {
+  const safeUrl = assertHttpsUrl(url);
+  const response = await fetch(safeUrl, {
+    headers: {
+      "User-Agent": "Blendy/1.0 local tutor read-only fetch",
+      "Accept": "text/html,text/plain,application/xhtml+xml",
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} while fetching ${safeUrl}`);
+  }
+  const raw = await response.text();
+  const titleMatch = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(raw);
+  const title = titleMatch ? stripHtml(titleMatch[1]) : safeUrl;
+  return formatToolItems(
+    [
+      {
+        title,
+        url: safeUrl,
+        authority: "live HTTPS page",
+        summary: relevantSnippet(raw, query || safeUrl, 1400),
+      },
+    ],
+    "The page was fetched, but no readable text was found.",
+  );
+}
+
+function parseSearchResults(raw, query) {
+  const results = [];
+  const seen = new Set();
+  const anchorRe = /<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+  let match;
+  while ((match = anchorRe.exec(raw)) && results.length < 6) {
+    let url = match[1].replace(/&amp;/g, "&");
+    const title = stripHtml(match[2]);
+    if (!title || /duckduckgo|feedback|settings|privacy/i.test(title)) {
+      continue;
+    }
+    if (url.startsWith("//duckduckgo.com/l/?")) {
+      const parsed = new URL(`https:${url}`);
+      url = parsed.searchParams.get("uddg") || url;
+    } else if (url.startsWith("/l/?")) {
+      const parsed = new URL(`https://duckduckgo.com${url}`);
+      url = parsed.searchParams.get("uddg") || url;
+    }
+    try {
+      url = assertHttpsUrl(decodeURIComponent(url));
+    } catch (_error) {
+      continue;
+    }
+    if (seen.has(url)) {
+      continue;
+    }
+    seen.add(url);
+    results.push({
+      title,
+      url,
+      authority: "web search result",
+      summary: `Search result for "${query}". Use fetch_url on this URL if more detail is needed.`,
+    });
+  }
+  return results;
+}
+
+async function webSearch(query) {
+  const cleanQuery = String(query || "").trim();
+  if (!cleanQuery) {
+    throw new Error("Search query is empty.");
+  }
+  const url = `https://duckduckgo.com/html/?q=${encodeURIComponent(cleanQuery)}`;
+  const response = await fetch(url, {
+    headers: {
+      "User-Agent": "Blendy/1.0 local tutor read-only search",
+      "Accept": "text/html",
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} while searching the web.`);
+  }
+  const raw = await response.text();
+  const results = parseSearchResults(raw, cleanQuery);
+  return formatToolItems(results, "Web search returned no parseable HTTPS results.");
+}
+
+async function runBlendyToolCall(toolCall) {
+  const name = toolCall?.function?.name || "";
+  let args = {};
+  try {
+    args = JSON.parse(toolCall?.function?.arguments || "{}");
+  } catch (_error) {
+    throw new Error(`Tool ${name || "[unknown]"} received invalid JSON arguments.`);
+  }
+  if (name === "search_blender_docs") {
+    return searchLocalBlenderDocs(args.query);
+  }
+  if (name === "search_workflow_notes") {
+    return searchWorkflowNotes(args.query);
+  }
+  if (name === "web_search") {
+    return webSearch(args.query);
+  }
+  if (name === "fetch_url") {
+    return fetchUrlSnippet(args.url, args.query || "");
+  }
+  throw new Error(`Unknown tool requested: ${name || "[missing name]"}.`);
+}
+
+function estimateContextUsage({ prompt = "", context, chat, settings, extraMessages = [] }) {
   const limit = Math.max(1000, Number(settings.contextLimitTokens || DEFAULT_CONTEXT_LIMIT_TOKENS));
-  const contextText = buildContextText(prompt, context, chat.compactedSummary || "");
+  const toolsEnabled = toolUseEnabled(settings);
+  const contextText = buildContextText(prompt, context, chat.compactedSummary || "", { includeRetrieval: false });
   const systemPrompt = context.promptParts?.system_prompt || SYSTEM_PROMPT;
   const historyText = trimHistory(chat.messages)
     .map((message) => `${message.role}: ${message.content}`)
     .join("\n\n");
+  const extraText = (extraMessages || [])
+    .map((message) => `${message.role || ""}: ${message.name || ""} ${message.content || ""}`)
+    .join("\n\n");
   const baselineTokens = estimateTokens(`${systemPrompt}\n\n${contextText}`);
   const historyTokens = estimateTokens(historyText);
   const promptTokens = estimateTokens(prompt);
-  const tokens = baselineTokens + historyTokens;
+  const toolDefinitionTokenCount = toolsEnabled ? toolDefinitionTokens() : 0;
+  const toolReserveTokens = toolsEnabled ? DEFAULT_TOOL_RESERVE_TOKENS : 0;
+  const imageReserveTokens = context.screenshotDataUrl ? DEFAULT_IMAGE_RESERVE_TOKENS : 0;
+  const toolRuntimeTokens = estimateTokens(extraText);
+  const tokens = baselineTokens + historyTokens + toolDefinitionTokenCount + toolReserveTokens + imageReserveTokens + toolRuntimeTokens;
   return {
     tokens,
     limit,
@@ -311,6 +739,14 @@ function estimateContextUsage({ prompt = "", context, chat, settings }) {
     baselineTokens,
     historyTokens,
     promptTokens,
+    toolDefinitionTokens: toolDefinitionTokenCount,
+    toolReserveTokens,
+    imageReserveTokens,
+    toolRuntimeTokens,
+    availableForConversationTokens: Math.max(
+      0,
+      limit - baselineTokens - toolDefinitionTokenCount - toolReserveTokens - imageReserveTokens,
+    ),
   };
 }
 
@@ -348,6 +784,11 @@ function contextToSnapshot(context, userDataPath, usage = null, promptPacketFile
     baselineTokens: usage?.baselineTokens || 0,
     conversationTokens: usage?.historyTokens || 0,
     latestPromptTokens: usage?.promptTokens || 0,
+    toolDefinitionTokens: usage?.toolDefinitionTokens || 0,
+    toolReserveTokens: usage?.toolReserveTokens || 0,
+    imageReserveTokens: usage?.imageReserveTokens || 0,
+    toolRuntimeTokens: usage?.toolRuntimeTokens || 0,
+    availableForConversationTokens: usage?.availableForConversationTokens || 0,
     contextLimitTokens: usage?.limit || DEFAULT_CONTEXT_LIMIT_TOKENS,
     contextPercent: usage?.percent || 0,
     contextStatus: usage?.status || "OK",
@@ -758,13 +1199,25 @@ function sanitizePromptPacketContent(content) {
 }
 
 function sanitizePromptPacketMessages(messages) {
-  return (messages || []).map((message) => ({
-    role: message.role,
-    content: sanitizePromptPacketContent(message.content),
-  }));
+  return (messages || []).map((message) => {
+    const clean = {
+      role: message.role,
+      content: sanitizePromptPacketContent(message.content),
+    };
+    if (message.name) {
+      clean.name = message.name;
+    }
+    if (message.tool_call_id) {
+      clean.tool_call_id = message.tool_call_id;
+    }
+    if (Array.isArray(message.tool_calls)) {
+      clean.tool_calls = message.tool_calls;
+    }
+    return clean;
+  });
 }
 
-function writePromptPacket(filePath, { payload, prompt, context }) {
+function writePromptPacket(filePath, { payload, prompt, context, toolTrace = [], contextUsage = null }) {
   writeJson(filePath, {
     version: 1,
     createdAt: new Date().toISOString(),
@@ -775,6 +1228,10 @@ function writePromptPacket(filePath, { payload, prompt, context }) {
     temperature: payload.temperature,
     maxTokens: payload.max_tokens,
     stream: payload.stream,
+    toolChoice: payload.tool_choice || "none",
+    toolsOffered: Array.isArray(payload.tools) ? payload.tools.map((tool) => tool.function?.name || "") : [],
+    toolTrace,
+    contextUsage,
     knowledgeStatus: context.promptParts?.knowledge_status || {},
     knowledgeSources: context.promptParts?.knowledge_sources || [],
     routerTrace: context.promptParts?.router_trace || {},
@@ -912,8 +1369,7 @@ function shouldSendScreenshot(prompt, screenshotMode) {
   if (screenshotMode === "never") {
     return false;
   }
-  const lower = (prompt || "").toLowerCase();
-  return VISUAL_PROMPT_KEYWORDS.some((keyword) => lower.includes(keyword));
+  return Boolean(String(prompt || "").trim());
 }
 
 function isExplicitWebLookupRequest(prompt) {
@@ -1014,9 +1470,9 @@ async function captureBridgeContext(settings, request = {}, userDataPath = "") {
   const body = {
     prompt: request.prompt || "",
     screenshot: screenshotMode,
-    knowledgeMode: normalizeKnowledgeMode(settings.knowledgeMode),
-    webApproved: Boolean(request.webApproved),
-    webPrompt: request.webPrompt || "",
+    knowledgeMode: toolUseEnabled(settings) ? "TOOL_USE" : normalizeKnowledgeMode(settings.knowledgeMode),
+    webApproved: false,
+    webPrompt: "",
   };
   const bridge = resolveBridgeUrl(settings, userDataPath);
   try {
@@ -1090,9 +1546,10 @@ function blenderVersionLock(prompt, context) {
   return "No live Blender version was provided. Avoid version-specific claims when possible, and say when a UI path may vary by Blender version.";
 }
 
-function buildContextText(prompt, context, compactedSummary) {
+function buildContextText(prompt, context, compactedSummary, options = {}) {
+  const includeRetrieval = options.includeRetrieval === true;
   const parts = context.promptParts || {};
-  if (typeof parts.context_text === "string" && parts.context_text.trim()) {
+  if (includeRetrieval && typeof parts.context_text === "string" && parts.context_text.trim()) {
     return injectCompactedSummary(parts.context_text, compactedSummary);
   }
   const projectBrief = shouldIncludeProjectBrief(prompt)
@@ -1102,12 +1559,13 @@ function buildContextText(prompt, context, compactedSummary) {
     context.contextLine || "Used: Blender context unavailable",
     context.visual || "Viewport status unavailable",
     context.screenshotDataUrl ? "Blender screen screenshot is attached to this message." : "No Blender screen screenshot is attached.",
+    context.screenshotDataUrl ? "Screen visibility check: Blendy may answer from the attached screenshot and scene data." : "Screen visibility check: no screenshot reached the model; if the user expects screen visibility, say this and answer only from runtime/scene facts.",
   ].join("\n");
   return `USER PROMPT
 ${prompt.trim()}
 
-ROUTER DECISION
-${parts.router_decision || "[no router decision available]"}
+TOOL USE
+Read-only tools are available when you need Blender docs, workflow notes, web search, or a fetched HTTPS page. Do not claim you used a source unless a tool result is present in this conversation.
 
 BLENDER VERSION LOCK
 ${blenderVersionLock(prompt, context)}
@@ -1133,21 +1591,6 @@ ${parts.semantic_scene_card || "[no semantic scene card available]"}
 READ-ONLY VERIFICATION NOTES
 ${parts.verification_notes || "[no read-only verification notes available]"}
 
-KNOWLEDGE REFERENCES
-${parts.knowledge_references || "[no local official docs matched this prompt]"}
-
-WEB REFERENCES
-${parts.web_references || "[web lookup not run]"}
-
-WORKFLOW CARDS
-${parts.workflow_cards || "[no workflow shortcut cards selected]"}
-
-TROUBLESHOOTING CARDS
-${parts.troubleshooting_cards || "[no troubleshooting cards selected]"}
-
-BLENDER TOOL REFERENCES
-${parts.tool_references || "[no targeted tool references selected]"}
-
 PROJECT BRIEF / TRUTH.MD
 ${projectBrief}
 
@@ -1165,15 +1608,15 @@ function injectCompactedSummary(contextText, compactedSummary) {
   return `${contextText.slice(0, index + marker.length)}\n${summary}`;
 }
 
-function buildChatPayload({ prompt, context, chat, settings }) {
-  const contextText = buildContextText(prompt, context, chat.compactedSummary || "");
+function buildChatPayload({ prompt, context, chat, settings, includeTools = true }) {
+  const contextText = buildContextText(prompt, context, chat.compactedSummary || "", { includeRetrieval: false });
   const userContent = context.screenshotDataUrl
     ? [
         { type: "text", text: contextText },
         { type: "image_url", image_url: { url: context.screenshotDataUrl } },
       ]
     : contextText;
-  return {
+  const payload = {
     model: settings.model === "auto" ? "" : settings.model,
     messages: [
       { role: "system", content: context.promptParts?.system_prompt || SYSTEM_PROMPT },
@@ -1184,6 +1627,11 @@ function buildChatPayload({ prompt, context, chat, settings }) {
     max_tokens: Math.max(256, Number(settings.responseMaxTokens || DEFAULT_RESPONSE_MAX_TOKENS)),
     stream: true,
   };
+  if (includeTools && toolUseEnabled(settings)) {
+    payload.tools = BLENDY_TOOL_DEFINITIONS;
+    payload.tool_choice = "auto";
+  }
+  return payload;
 }
 
 function visibleChatMessages(messages) {
@@ -1442,6 +1890,165 @@ async function runLmStudioCompletion({ settings, payload, onDelta, beforeSend })
   return repairBlankVisibleAnswer({ settings, payload, onDelta });
 }
 
+async function runLmStudioJsonMessage({ settings, payload }) {
+  const baseUrl = normalizeBaseUrl(settings.lmStudioBaseUrl, DEFAULT_LM_STUDIO_BASE_URL);
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`HTTP ${response.status} from LM Studio: ${detail || response.statusText}`);
+  }
+  const data = await response.json();
+  return data.choices?.[0]?.message || {};
+}
+
+function truncateToolResult(text) {
+  const clean = String(text || "").trim();
+  if (clean.length <= MAX_TOOL_RESULT_CHARS) {
+    return clean;
+  }
+  return `${clean.slice(0, MAX_TOOL_RESULT_CHARS - 28)}\n[tool result truncated]`;
+}
+
+function compactToolCallForTrace(toolCall) {
+  return {
+    id: toolCall.id || "",
+    name: toolCall.function?.name || "",
+    arguments: toolCall.function?.arguments || "{}",
+  };
+}
+
+function modelLooksLikeMalformedToolCall(message) {
+  const text = messageContentToText(message.content);
+  return /<tool_call|tool_calls|function_call/i.test(text) && /search_blender_docs|search_workflow_notes|web_search|fetch_url/i.test(text);
+}
+
+async function runLmStudioCompletionWithTools({
+  settings,
+  payload,
+  onDelta,
+  onDiagnostic,
+  prompt,
+  context,
+  chat,
+}) {
+  if (!toolUseEnabled(settings)) {
+    return runLmStudioCompletion({ settings, payload: { ...payload, tools: undefined, tool_choice: undefined }, onDelta, beforeSend: onDiagnostic });
+  }
+
+  const resolvedModel = await resolveModel(settings);
+  const basePayload = {
+    ...payload,
+    model: resolvedModel,
+    stream: false,
+    tools: BLENDY_TOOL_DEFINITIONS,
+    tool_choice: "auto",
+  };
+  const messages = cloneMessages(basePayload.messages);
+  const baseMessageCount = messages.length;
+  const toolTrace = [];
+
+  for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
+    const requestPayload = {
+      ...basePayload,
+      messages,
+      stream: false,
+      tools: BLENDY_TOOL_DEFINITIONS,
+      tool_choice: "auto",
+    };
+    onDiagnostic?.(requestPayload, toolTrace);
+    const message = await runLmStudioJsonMessage({ settings, payload: requestPayload });
+    const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+
+    if (!toolCalls.length) {
+      if (modelLooksLikeMalformedToolCall(message)) {
+        throw new Error(
+          "The loaded local model tried to use a tool, but LM Studio did not return a valid tool_calls object. Switch to a tool-capable instruct model in LM Studio, then try again.",
+        );
+      }
+      const finalText = cleanModelText(messageContentToText(message.content));
+      if (finalText) {
+        onDelta(finalText);
+        return finalText;
+      }
+      return repairBlankVisibleAnswer({
+        settings,
+        payload: { ...requestPayload, tools: undefined, tool_choice: undefined },
+        onDelta,
+      });
+    }
+
+    messages.push({
+      role: "assistant",
+      content: message.content || "",
+      tool_calls: toolCalls,
+    });
+
+    for (const toolCall of toolCalls) {
+      const traceItem = {
+        round: round + 1,
+        call: compactToolCallForTrace(toolCall),
+        ok: false,
+        resultPreview: "",
+      };
+      try {
+        const result = truncateToolResult(await runBlendyToolCall(toolCall));
+        traceItem.ok = true;
+        traceItem.resultPreview = result.slice(0, 1000);
+        messages.push({
+          role: "tool",
+          tool_call_id: toolCall.id || `${toolCall.function?.name || "tool"}-${round}`,
+          name: toolCall.function?.name || "tool",
+          content: result,
+        });
+      } catch (error) {
+        const result = `Tool error: ${error.message || String(error)}`;
+        traceItem.resultPreview = result;
+        messages.push({
+          role: "tool",
+          tool_call_id: toolCall.id || `${toolCall.function?.name || "tool"}-${round}`,
+          name: toolCall.function?.name || "tool",
+          content: result,
+        });
+      }
+      toolTrace.push(traceItem);
+    }
+
+    const usage = estimateContextUsage({
+      prompt,
+      context,
+      chat,
+      settings,
+      extraMessages: messages.slice(baseMessageCount),
+    });
+    if (usage.tokens >= usage.limit) {
+      throw new Error(
+        "The requested tool results exceeded Blendy's context budget. Try a narrower question or compact the chat before asking again.",
+      );
+    }
+  }
+
+  const finalPayload = {
+    ...basePayload,
+    messages: [
+      ...messages,
+      {
+        role: "user",
+        content:
+          "You have reached the tool-call limit. Use the tool results already shown above and provide the best final answer now without calling more tools.",
+      },
+    ],
+    stream: true,
+  };
+  delete finalPayload.tools;
+  delete finalPayload.tool_choice;
+  onDiagnostic?.(finalPayload, toolTrace);
+  return runLmStudioCompletion({ settings, payload: finalPayload, onDelta });
+}
+
 function friendlyLmError(error) {
   const message = error.message || String(error);
   if (/fetch failed|ECONNREFUSED|Could not connect|Failed to fetch/i.test(message)) {
@@ -1488,18 +2095,24 @@ function registerBackendIpc({ app, ipcMain }) {
           chat: { ...chat, messages: chat.messages.filter((message) => message.id !== assistantMessage.id) },
           settings,
         });
-        const finalText = await runLmStudioCompletion({
+        const writeDiagnostics = (resolvedPayload, toolTrace = []) => {
+          if (promptPacketFilePath) {
+            writePromptPacket(promptPacketFilePath, {
+              payload: resolvedPayload,
+              prompt,
+              context,
+              toolTrace,
+              contextUsage: estimateContextUsage({ prompt, context, chat, settings }),
+            });
+          }
+        };
+        const finalText = await runLmStudioCompletionWithTools({
           settings,
           payload,
-          beforeSend(resolvedPayload) {
-            if (promptPacketFilePath) {
-              writePromptPacket(promptPacketFilePath, {
-                payload: resolvedPayload,
-                prompt,
-                context,
-              });
-            }
-          },
+          prompt,
+          context,
+          chat,
+          onDiagnostic: writeDiagnostics,
           onDelta(delta) {
             sender.send("blendy:chat-event", {
               type: "assistant-delta",
@@ -1592,8 +2205,6 @@ function registerBackendIpc({ app, ipcMain }) {
       {
         prompt,
         forceScreenshot: false,
-        webApproved: isExplicitWebLookupRequest(prompt),
-        webPrompt: prompt,
       },
       userDataPath,
     );
@@ -1601,19 +2212,6 @@ function registerBackendIpc({ app, ipcMain }) {
     const key = state.storageKey;
     const packetPath = promptPacketPath(userDataPath, key);
     let chat = state.chat;
-    const webApproval = resolveWebApproval(prompt, chat.messages);
-    if (webApproval.webApproved && (!context.promptParts?.web_approved || webApproval.webPrompt !== prompt)) {
-      context = await captureBridgeContext(
-        settings,
-        {
-          prompt,
-          forceScreenshot: false,
-          webApproved: true,
-          webPrompt: webApproval.webPrompt,
-        },
-        userDataPath,
-      );
-    }
     const userMessage = {
       id: crypto.randomUUID(),
       role: "user",
@@ -1629,20 +2227,6 @@ function registerBackendIpc({ app, ipcMain }) {
       context: receipt.line,
       receipt: receipt.details,
     };
-    if (!bridgeHonoredWebApproval(context, webApproval)) {
-      assistantMessage.content = staleBridgeWebApprovalMessage();
-      assistantMessage.status = "done";
-      chat.messages.push(userMessage, assistantMessage);
-      saveChat(userDataPath, key, chat);
-      const nextIndex = touchChatSession(userDataPath, state.session.id, chat, inferChatTitle(chat));
-      const usage = estimateContextUsage({ prompt, context, chat, settings });
-      return {
-        userMessage,
-        assistantMessage,
-        context: contextToSnapshot(context, userDataPath, usage, packetPath),
-        diagnostics: chatDiagnostics(userDataPath, { ...state, index: nextIndex, chat }, packetPath),
-      };
-    }
     const projectedChat = {
       ...chat,
       messages: [...chat.messages, userMessage],
@@ -1695,14 +2279,11 @@ function registerBackendIpc({ app, ipcMain }) {
     if (!lastUser) {
       throw new Error("There is no user message to regenerate from.");
     }
-    const webApproval = resolveWebApproval(lastUser.content, chat.messages);
     const refreshedContext = await captureBridgeContext(
       settings,
       {
         prompt: lastUser.content,
         forceScreenshot: false,
-        webApproved: webApproval.webApproved || isExplicitWebLookupRequest(lastUser.content),
-        webPrompt: webApproval.webPrompt || lastUser.content,
       },
       userDataPath,
     );

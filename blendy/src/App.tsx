@@ -29,10 +29,10 @@ import type {
   ChatEvent,
   ChatSession,
   ContextSnapshot,
-  KnowledgeMode,
   Message,
   PageName,
   ThemeName,
+  ToolUseMode,
 } from "./types";
 
 const SETTINGS_KEY = "blendy.prototype.settings";
@@ -48,6 +48,7 @@ const defaultBackendSettings: BackendSettings = {
   model: "auto",
   responseMaxTokens: 8000,
   contextLimitTokens: 70000,
+  toolUse: "AUTO",
   knowledgeMode: "LOCAL_AUTO_WEB",
 };
 
@@ -102,7 +103,9 @@ function contextButtonLabel(contextSnapshot: ContextSnapshot): string {
   const used = contextSnapshot.contextTokens || 0;
   const limit = contextSnapshot.contextLimitTokens || 70000;
   const conversation = contextSnapshot.conversationTokens || 0;
-  return `Context ${formatTokens(used)} / ${formatTokens(limit)}. Conversation ${formatTokens(conversation)}.`;
+  const tools = (contextSnapshot.toolDefinitionTokens || 0) + (contextSnapshot.toolReserveTokens || 0);
+  const screenshot = contextSnapshot.imageReserveTokens || 0;
+  return `Context ${formatTokens(used)} / ${formatTokens(limit)}. Conversation ${formatTokens(conversation)}. Tools ${formatTokens(tools)}. Screenshot ${formatTokens(screenshot)}.`;
 }
 
 function App() {
@@ -849,15 +852,27 @@ function App() {
                     </div>
                     <div className="context-menu-breakdown">
                       <div>
-                        <span>Baseline scene/prompt</span>
+                        <span>Base context</span>
                         <strong>{formatTokens(contextSnapshot.baselineTokens || 0)}</strong>
                       </div>
                       <div>
                         <span>Conversation</span>
                         <strong>{formatTokens(contextSnapshot.conversationTokens || 0)}</strong>
                       </div>
+                      <div>
+                        <span>Tools</span>
+                        <strong>{formatTokens((contextSnapshot.toolDefinitionTokens || 0) + (contextSnapshot.toolReserveTokens || 0))}</strong>
+                      </div>
+                      <div>
+                        <span>Screenshot</span>
+                        <strong>{formatTokens(contextSnapshot.imageReserveTokens || 0)}</strong>
+                      </div>
+                      <div>
+                        <span>Remaining</span>
+                        <strong>{formatTokens(Math.max(0, (contextSnapshot.contextLimitTokens || 0) - (contextSnapshot.contextTokens || 0)))}</strong>
+                      </div>
                     </div>
-                    <p className="context-menu-note">Compact shrinks conversation history, not the baseline Blender context Blendy needs to answer accurately.</p>
+                    <p className="context-menu-note">Compact shrinks conversation history. Tools and screenshot reserve are counted because the local model may need them inside the same answer.</p>
                     <button type="button" onClick={compactNow} disabled={isManagingContext}>
                       Compact now
                     </button>
@@ -1246,18 +1261,17 @@ function SettingsPage({
         </label>
       </SettingsGroup>
 
-      <SettingsGroup title="Knowledge">
+      <SettingsGroup title="Tools">
         <SegmentedControl
-          label="Knowledge"
-          value={backendSettings.knowledgeMode}
+          label="Tool use"
+          value={backendSettings.toolUse}
           options={[
-            ["LOCAL_AUTO_WEB", "Local + Auto Web"],
-            ["LOCAL_ONLY", "Local Only"],
-            ["ASK_BEFORE_WEB", "Ask Before Web"],
+            ["AUTO", "Auto"],
+            ["OFF", "Off"],
           ]}
-          onChange={(knowledgeMode) => updateBackendSettings({ knowledgeMode: knowledgeMode as KnowledgeMode })}
+          onChange={(toolUse) => updateBackendSettings({ toolUse: toolUse as ToolUseMode })}
         />
-        <p className="setting-note">Auto Web checks allowlisted Blender sources and shows what it used in Diagnostics.</p>
+        <p className="setting-note">Blendy lets the local model request docs, workflow notes, and web lookup tools when needed.</p>
       </SettingsGroup>
 
       <SettingsGroup title="LM Studio">
@@ -1311,8 +1325,13 @@ function SettingsPage({
         />
         <DataLine label="Baseline context" value={formatTokens(contextSnapshot.baselineTokens || 0)} />
         <DataLine label="Conversation context" value={formatTokens(contextSnapshot.conversationTokens || 0)} />
+        <DataLine label="Tool definitions" value={formatTokens(contextSnapshot.toolDefinitionTokens || 0)} />
+        <DataLine label="Tool reserve" value={formatTokens(contextSnapshot.toolReserveTokens || 0)} />
+        <DataLine label="Screenshot reserve" value={formatTokens(contextSnapshot.imageReserveTokens || 0)} />
+        <DataLine label="Available for conversation" value={formatTokens(contextSnapshot.availableForConversationTokens || 0)} />
         <DataLine label="Bridge URL" value={contextSnapshot.bridgeUrl || backendSettings.bridgeUrl} />
         <DataLine label="Bridge mode" value={contextSnapshot.bridgeSource || backendSettings.bridgeUrl} />
+        <DataLine label="Tool use" value={backendSettings.toolUse} />
         <DataLine label="Knowledge mode" value={contextSnapshot.knowledgeModeLabel || backendSettings.knowledgeMode} />
         <DataLine label="Docs index" value={contextSnapshot.docsIndexStatus || "Not checked yet"} />
         <DataLine label="Last web lookup" value={contextSnapshot.lastWebLookupStatus || "Not checked yet"} />
@@ -1334,7 +1353,7 @@ function SettingsPage({
         <DataLine label="Discovery file" value={contextSnapshot.bridgeDiscoveryPath || "Auto"} />
         <DataLine label="Chat file" value={chatPath || "Not created yet"} />
         <DataLine label="Prompt packet" value={contextSnapshot.promptPacketPath || "Not created yet"} />
-        <p className="setting-note">Diagnostics opens the latest model request Blendy sent for this project, with Blender screen screenshot data omitted, so you can inspect grounding, router choices, and selected cards.</p>
+        <p className="setting-note">Diagnostics opens the latest model request Blendy sent for this project, with Blender screen screenshot data omitted, so you can inspect grounding, tool calls, and context accounting.</p>
         <button
           className="secondary-button"
           type="button"

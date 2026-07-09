@@ -355,14 +355,14 @@ if bpy is not None:
         include_screenshot: BoolProperty(
             name="Visual",
             default=True,
-            description="Allow Blender screen screenshots when the context mode calls for visual input",
+            description="Allow Blender screen screenshots to be sent with prompts",
         )
         context_mode: EnumProperty(
             name="Context Mode",
             default=core.CONTEXT_MODE_AUTO,
             description="Choose when the tutor should receive a Blender screen image",
             items=[
-                (core.CONTEXT_MODE_AUTO, "Auto", "Use scene data every time and add a Blender screen image for visual prompts"),
+                (core.CONTEXT_MODE_AUTO, "Auto", "Use scene data and add a Blender screen image with every prompt"),
                 (core.CONTEXT_MODE_SCENE, "Scene Data Only", "Never attach a screenshot"),
                 (core.CONTEXT_MODE_VIEWPORT, "Blender Screen", "Attach a Blender screen screenshot whenever Visual is enabled"),
             ],
@@ -1071,15 +1071,53 @@ if bpy is not None:
             knowledge_mode or getattr(props, "knowledge_mode", core.DEFAULT_KNOWLEDGE_MODE)
         )
         knowledge_prompt = web_prompt.strip() if web_approved and web_prompt.strip() else prompt
-        knowledge = core.retrieve_knowledge(
-            prompt=knowledge_prompt,
-            scene_context=scene_context,
-            runtime_facts=runtime_facts,
-            recent_messages=recent_messages,
-            knowledge_mode=effective_knowledge_mode,
-            allow_default_web=True,
-            web_approved=web_approved or core.is_explicit_web_lookup_request(prompt),
-        )
+        if effective_knowledge_mode == core.KNOWLEDGE_MODE_TOOL_USE:
+            knowledge = {
+                "router_decision": "",
+                "scene_diagnostic_flags": "",
+                "workflow_cards": "",
+                "troubleshooting_cards": "",
+                "knowledge_references": "",
+                "web_references": "",
+                "semantic_scene_card": "",
+                "verification_notes": "",
+                "router_trace": {
+                    "selectedRoute": "",
+                    "score": 0,
+                    "answerRisk": "unknown",
+                    "workflowCards": [],
+                    "troubleshootingCards": [],
+                    "cardsStatus": core.veteran_cards_status(),
+                    "webDecision": "Tool Use mode: retrieval waits for model-requested tools.",
+                    "webSearchQueries": [],
+                    "webSearchUsedQueries": [],
+                },
+                "knowledge_status": {
+                    "mode": core.KNOWLEDGE_MODE_TOOL_USE,
+                    "modeLabel": core.knowledge_mode_label(core.KNOWLEDGE_MODE_TOOL_USE),
+                    "docsIndexStatus": core.docs_index_status(runtime_facts),
+                    "lastWebLookupStatus": "Tool Use mode: no web lookup before the model requests one.",
+                    "sourceUrls": [],
+                    "confidence": 0,
+                    "reliedOn": "live scene + screenshot + model-requested tools",
+                    "selectedRoute": "",
+                    "routeScore": 0,
+                    "answerRisk": "unknown",
+                    "veteranCardsStatus": core.veteran_cards_status(),
+                    "selectedCards": [],
+                },
+                "knowledge_sources": [],
+            }
+        else:
+            knowledge = core.retrieve_knowledge(
+                prompt=knowledge_prompt,
+                scene_context=scene_context,
+                runtime_facts=runtime_facts,
+                recent_messages=recent_messages,
+                knowledge_mode=effective_knowledge_mode,
+                allow_default_web=True,
+                web_approved=web_approved or core.is_explicit_web_lookup_request(prompt),
+            )
         return {
             "prompt": prompt,
             "knowledge_prompt": knowledge_prompt,
@@ -1356,6 +1394,11 @@ if bpy is not None:
                 context_line,
                 visual,
                 "Blender screen screenshot is attached to this message." if screenshot else "No Blender screen screenshot is attached.",
+                (
+                    "Screen visibility check: Blendy may answer from the attached screenshot and scene data."
+                    if screenshot
+                    else "Screen visibility check: no screenshot reached the model; if the user expects screen visibility, say this and answer only from runtime/scene facts."
+                ),
             ]
         )
         context_text = core.build_context_text(

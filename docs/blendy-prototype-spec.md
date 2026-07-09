@@ -60,7 +60,8 @@ the full Blender bridge and LM Studio backend.
 
 - Every Send will inspect Blender first once backend integration exists.
 - No manual Inspect button in v1.
-- Auto screenshot inclusion based on prompt wording.
+- Auto screenshot inclusion sends Blender screen context with every non-empty
+  prompt when Visual is enabled.
 - Manual Capture control is secondary in the Visual context area.
 - No confirmation prompts before local screenshot use.
 - Full screenshots are temporary and deleted after send.
@@ -68,6 +69,25 @@ the full Blender bridge and LM Studio backend.
 - User message shows compact context line, for example:
   `Used: Units mm · Cube selected · Bevel 0.01mm / 5 seg · Viewport inspected`
 - Context line can expand later to show exact captured context.
+
+## Prompting And Retrieval Policy
+
+See `docs/blendy-vision-and-prompting-policy.md` for the current product
+contract.
+
+- Blendy should behave like a natural local chat tutor with extra Blender
+  evidence, not like a scripted router.
+- The model-facing packet should always include the user's prompt, live Blender
+  scene/runtime facts, and screenshot status.
+- In Tool Use Auto mode, the model-facing packet should include read-only tool
+  definitions for Blender docs, workflow notes, web search, and URL fetching.
+- Docs, workflow notes, troubleshooting notes, and web references should appear
+  only after the model requests a tool. They should not be preselected as a
+  route or replace the user's natural-language intent.
+- Guardrails should protect evidence quality and honesty: do not fake screen
+  visibility, web results, Blender state, or completed actions.
+- The context meter should count tool definitions, tool-result reserve, and
+  screenshot reserve so the bar reflects the real practical context budget.
 
 ## Context Drawer
 

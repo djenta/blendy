@@ -32,42 +32,6 @@ const PROJECT_BRIEF_PROMPT_KEYWORDS = [
 const BLENDER_VERSION_RE = /\bBlender version:\s*([^\n\r]+)/i;
 const USER_STATED_BLENDER_VERSION_RE = /\bblender\s+([0-9]+(?:\.[0-9]+){0,2}(?:[-_a-zA-Z0-9.]*)?)/i;
 
-const VISUAL_PROMPT_KEYWORDS = [
-  "see",
-  "screenshot",
-  "look",
-  "looks",
-  "visible",
-  "shape",
-  "silhouette",
-  "proportion",
-  "proportions",
-  "view",
-  "frame",
-  "camera",
-  "render",
-  "node",
-  "nodes",
-  "compositor",
-  "glare",
-  "bloom",
-  "threshold",
-  "streaks",
-  "fog glow",
-  "object",
-  "model",
-  "mesh",
-  "phone",
-  "iphone",
-  "rectangle",
-  "cube",
-  "what do i do first",
-  "what do i do next",
-  "what's next",
-  "does this",
-  "is this",
-];
-
 const SYSTEM_PROMPT = `You are Blendy, a local Blender tutor for beginner artists who want clear guidance and persistence. You live inside the user's local Blender workflow.
 
 Primary user workflow:
@@ -87,12 +51,12 @@ Truth ladder:
 - For part-relationship questions framed as "should this attach/connect/plug/touch/go into A or B", answer the immediate contact relationship first. Preserve the named roles in the user's wording, build the shortest physical chain between the parts, and do not collapse an intermediate part into a larger body just because they are near each other.
 - Project Brief / truth.md is optional memory. It is normally omitted; use it only when it is included or when the user asks about the project goal, requirements, constraints, or truth.md.
 - Then trust KNOWLEDGE REFERENCES and WEB REFERENCES. Local official docs are the authority for stable Blender facts; broad web results are allowed for current info, community workflow discoveries, add-ons, names, and examples, but label them by source quality.
-- Use WORKFLOW CARDS as veteran Blender workflow wisdom: if a card says the user is brute-forcing a task, suggest the smarter Blender-native move instead of more manual edits.
-- Use TROUBLESHOOTING CARDS when the user followed a step but the result is missing, wrong, unchanged, or confusing. Diagnose likely blockers before giving more modeling steps.
+- Use WORKFLOW CARDS and TROUBLESHOOTING CARDS as optional background notes, not a script or route. Ignore any card that does not fit the user's latest prompt, screenshot, or live scene facts.
 - Then trust BLENDER TOOL REFERENCES as local beginner-pitfall notes.
 - Use model memory only as background, never as stronger evidence than provided Blender facts.
 - If the evidence is incomplete, say it naturally: "I can see...", "I'm inferring...", or "I can't tell from the current Blendy context."
 - Do not invent Blender state, UI locations, file contents, object names, measurements, or actions you cannot verify from the provided context.
+- If the user expects screen visibility but VISUAL CONTEXT says no screenshot is attached, state that plainly and answer only from scene/runtime facts. Do not claim you can see the screen.
 - For node editor questions, trust the live node context inventory before Blender memory. Only name node controls, modes, sockets, dropdown values, or links that appear in CURRENT BLENDER SCENE CONTEXT, screenshot evidence, or cited docs. If node details are absent, say you cannot inspect the node internals from the current context.
 - For "what do you see", "look at my screen", "I don't see X", and similar live-screen questions, do not use web search unless the user explicitly asks to search online. Web results cannot see the user's current Blender screen.
 - If the user asks about Blender startup defaults, preferences, future new files, or general app behavior, answer that global Blender question instead of forcing the answer back to the current project units or scene.
@@ -886,8 +850,7 @@ function shouldSendScreenshot(prompt, screenshotMode) {
   if (screenshotMode === "never") {
     return false;
   }
-  const lower = (prompt || "").toLowerCase();
-  return VISUAL_PROMPT_KEYWORDS.some((keyword) => lower.includes(keyword));
+  return Boolean(String(prompt || "").trim());
 }
 
 function isExplicitWebLookupRequest(prompt) {
@@ -1076,11 +1039,12 @@ function buildContextText(prompt, context, compactedSummary) {
     context.contextLine || "Used: Blender context unavailable",
     context.visual || "Viewport status unavailable",
     context.screenshotDataUrl ? "Blender screen screenshot is attached to this message." : "No Blender screen screenshot is attached.",
+    context.screenshotDataUrl ? "Screen visibility check: Blendy may answer from the attached screenshot and scene data." : "Screen visibility check: no screenshot reached the model; if the user expects screen visibility, say this and answer only from runtime/scene facts.",
   ].join("\n");
   return `USER PROMPT
 ${prompt.trim()}
 
-ROUTER DECISION
+RETRIEVAL NOTES
 ${parts.router_decision || "[no router decision available]"}
 
 BLENDER VERSION LOCK
@@ -1113,10 +1077,10 @@ ${parts.knowledge_references || "[no local official docs matched this prompt]"}
 WEB REFERENCES
 ${parts.web_references || "[web lookup not run]"}
 
-WORKFLOW CARDS
+OPTIONAL WORKFLOW NOTES
 ${parts.workflow_cards || "[no workflow shortcut cards selected]"}
 
-TROUBLESHOOTING CARDS
+OPTIONAL TROUBLESHOOTING NOTES
 ${parts.troubleshooting_cards || "[no troubleshooting cards selected]"}
 
 BLENDER TOOL REFERENCES

@@ -48,7 +48,8 @@ class CoreTests(unittest.TestCase):
         self.assertIn("omitted by default", payload["messages"][-1]["content"])
         self.assertNotIn("Make a tower.", payload["messages"][-1]["content"])
         self.assertIn("VISUAL CONTEXT", payload["messages"][-1]["content"])
-        self.assertIn("ROUTER DECISION", payload["messages"][-1]["content"])
+        self.assertIn("RETRIEVAL NOTES", payload["messages"][-1]["content"])
+        self.assertNotIn("ROUTER DECISION", payload["messages"][-1]["content"])
         self.assertIn("BLENDER VERSION LOCK", payload["messages"][-1]["content"])
         self.assertIn("Active Blender runtime version: 5.0.1", payload["messages"][-1]["content"])
         self.assertIn("Treat this as authoritative", payload["messages"][-1]["content"])
@@ -59,8 +60,8 @@ class CoreTests(unittest.TestCase):
         self.assertIn("SCENE DIAGNOSTIC FLAGS", payload["messages"][-1]["content"])
         self.assertIn("KNOWLEDGE REFERENCES", payload["messages"][-1]["content"])
         self.assertIn("WEB REFERENCES", payload["messages"][-1]["content"])
-        self.assertIn("WORKFLOW CARDS", payload["messages"][-1]["content"])
-        self.assertIn("TROUBLESHOOTING CARDS", payload["messages"][-1]["content"])
+        self.assertIn("OPTIONAL WORKFLOW NOTES", payload["messages"][-1]["content"])
+        self.assertIn("OPTIONAL TROUBLESHOOTING NOTES", payload["messages"][-1]["content"])
         self.assertIn("BLENDER TOOL REFERENCES", payload["messages"][-1]["content"])
         self.assertIn("SCENE CHANGES SINCE LAST PROMPT", payload["messages"][-1]["content"])
         self.assertIn("Blender version: 5.0.1", payload["messages"][-1]["content"])
@@ -126,9 +127,9 @@ class CoreTests(unittest.TestCase):
         self.assertIn("answer the immediate contact relationship first", core.SYSTEM_PROMPT)
         self.assertIn("Preserve the named roles in the user's wording", core.SYSTEM_PROMPT)
         self.assertIn("do not collapse an intermediate part into a larger body", core.SYSTEM_PROMPT)
-        self.assertIn("KNOWLEDGE REFERENCES and WEB REFERENCES", core.SYSTEM_PROMPT)
-        self.assertIn("Use WORKFLOW CARDS as veteran Blender workflow wisdom", core.SYSTEM_PROMPT)
-        self.assertIn("Use TROUBLESHOOTING CARDS", core.SYSTEM_PROMPT)
+        self.assertIn("Use read-only tools when you need extra references", core.SYSTEM_PROMPT)
+        self.assertIn("workflow and troubleshooting tool results as optional background notes", core.SYSTEM_PROMPT)
+        self.assertIn("not a script or route", core.SYSTEM_PROMPT)
         self.assertNotIn("charger body -> port/cutout -> connector plug -> cable", core.SYSTEM_PROMPT)
         self.assertIn("prefer Curve objects with bevel depth", core.SYSTEM_PROMPT)
         self.assertIn("Project Brief / truth.md is optional memory", core.SYSTEM_PROMPT)
@@ -137,6 +138,7 @@ class CoreTests(unittest.TestCase):
         self.assertIn("I can't tell from the current Blendy context", core.SYSTEM_PROMPT)
         self.assertIn("For node editor questions, trust the live node context inventory", core.SYSTEM_PROMPT)
         self.assertIn("Web results cannot see the user's current Blender screen", core.SYSTEM_PROMPT)
+        self.assertIn("VISUAL CONTEXT says no screenshot is attached", core.SYSTEM_PROMPT)
         self.assertIn("startup defaults, preferences, future new files, or general app behavior", core.SYSTEM_PROMPT)
         self.assertIn("Name the Blender mode, tool/menu/operator", core.SYSTEM_PROMPT)
         self.assertIn("direct answer first", core.SYSTEM_PROMPT)
@@ -234,7 +236,14 @@ class CoreTests(unittest.TestCase):
             core.should_send_screenshot(
                 context_mode=core.CONTEXT_MODE_AUTO,
                 include_screenshot=True,
-                prompt="Does this shape look like an iPhone?",
+                prompt="Explain modifiers",
+            )
+        )
+        self.assertFalse(
+            core.should_send_screenshot(
+                context_mode=core.CONTEXT_MODE_AUTO,
+                include_screenshot=True,
+                prompt="",
             )
         )
         self.assertFalse(
@@ -249,6 +258,13 @@ class CoreTests(unittest.TestCase):
                 context_mode=core.CONTEXT_MODE_AUTO,
                 include_screenshot=True,
                 prompt="There is no streaks button on this glare node",
+            )
+        )
+        self.assertTrue(
+            core.should_send_screenshot(
+                context_mode=core.CONTEXT_MODE_AUTO,
+                include_screenshot=True,
+                prompt="ive done everything you said, its not working",
             )
         )
 
@@ -676,8 +692,8 @@ class CoreTests(unittest.TestCase):
 
     def test_system_prompt_forbids_fake_web_claims_without_web_refs(self) -> None:
         self.assertIn("Never claim you searched Google", core.SYSTEM_PROMPT)
-        self.assertIn("unless WEB REFERENCES contains actual retrieved source URLs", core.SYSTEM_PROMPT)
-        self.assertIn("Do not say you lack a web search tool", core.SYSTEM_PROMPT)
+        self.assertIn("unless a web_search or fetch_url tool result with source URLs is present", core.SYSTEM_PROMPT)
+        self.assertIn("Do not say you lack web access", core.SYSTEM_PROMPT)
 
     def test_uncertain_knowledge_tells_model_to_ask_one_question(self) -> None:
         knowledge = core.retrieve_knowledge(
@@ -837,10 +853,10 @@ class CoreTests(unittest.TestCase):
             scene_context="Cube selected.",
             runtime_facts="Blender version: 5.0.1",
             tool_references="Tool card: Bevel",
-            router_decision="Selected route: troubleshooting",
+            router_decision="Internal retrieval hints only.",
             scene_diagnostic_flags="- Object scale is not 1,1,1",
-            workflow_cards="- Card: Bevel Modifier for Realistic Edges",
-            troubleshooting_cards="- Card: Bevel Modifier Appears to Do Nothing",
+            workflow_cards="- Optional note: Bevel Modifier for Realistic Edges",
+            troubleshooting_cards="- Optional note: Bevel Modifier Appears to Do Nothing",
             knowledge_references="Title: Bevel Modifier - Blender Manual",
             web_references="Title: Bevel - live official docs",
             semantic_scene_card="Latest task: How do I bevel this?",
@@ -851,7 +867,7 @@ class CoreTests(unittest.TestCase):
         )
 
         self.assertGreater(breakdown["Tool refs"], 0)
-        self.assertGreater(breakdown["Router"], 0)
+        self.assertGreater(breakdown["Retrieval notes"], 0)
         self.assertGreater(breakdown["Scene flags"], 0)
         self.assertGreater(breakdown["Workflow cards"], 0)
         self.assertGreater(breakdown["Troubleshooting cards"], 0)

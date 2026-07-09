@@ -1,6 +1,7 @@
 export type ThemeName = "solar" | "sprint";
 export type PageName = "chat" | "settings";
 export type KnowledgeMode = "LOCAL_AUTO_WEB" | "LOCAL_ONLY" | "ASK_BEFORE_WEB";
+export type ToolUseMode = "AUTO" | "OFF";
 
 export interface AppSettings {
   theme: ThemeName;
@@ -13,6 +14,7 @@ export interface BackendSettings {
   model: string;
   responseMaxTokens: number;
   contextLimitTokens: number;
+  toolUse: ToolUseMode;
   knowledgeMode: KnowledgeMode;
 }
 
@@ -99,6 +101,11 @@ export interface ContextSnapshot {
   baselineTokens?: number;
   conversationTokens?: number;
   latestPromptTokens?: number;
+  toolDefinitionTokens?: number;
+  toolReserveTokens?: number;
+  imageReserveTokens?: number;
+  toolRuntimeTokens?: number;
+  availableForConversationTokens?: number;
   contextLimitTokens?: number;
   contextPercent?: number;
   contextStatus?: "OK" | "WARN" | "DANGER";
