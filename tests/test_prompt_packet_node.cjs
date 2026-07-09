@@ -134,7 +134,17 @@ assert(bridgedPayload.messages.at(-1).content.includes("I am a beginner"));
 assert(bridgedPayload.messages.at(-1).content.includes("Remember that the user named the small part a connector."));
 assert(Array.isArray(bridgedPayload.tools));
 assert(bridgedPayload.tools.some((tool) => tool.function.name === "web_search"));
+assert(bridgedPayload.tools.find((tool) => tool.function.name === "web_search").function.description.includes("visual effect examples"));
 assert.strictEqual(bridgedPayload.tool_choice, "auto");
+assert.strictEqual(bridgedPayload.max_tokens, 6000);
+
+const nativePromptPayload = buildChatPayload({
+  prompt: "How do I make this look like a blood splash?",
+  context: { ...bridgedContext, promptParts: {} },
+  chat: { compactedSummary: "", messages: [] },
+  settings: { model: "gemma-test", responseMaxTokens: 2200, toolUse: "AUTO" },
+});
+assert(nativePromptPayload.messages[0].content.includes("Make a fast choice"));
 
 const toolOffPayload = buildChatPayload({
   prompt: "Where should this attach?",
@@ -394,12 +404,83 @@ async function testToolCallLoop() {
   assert.strictEqual(requests.length, 2);
   assert(Array.isArray(requests[0].tools));
   assert.strictEqual(requests[0].tool_choice, "auto");
+  assert.strictEqual(requests[0].max_tokens, 650);
   assert(requests[1].messages.some((message) => message.role === "tool" && message.name === "search_blender_docs"));
+  assert.strictEqual(requests[1].max_tokens, 650);
   assert(finalText.includes("Bevel modifier"));
   assert(streamed.includes("Bevel modifier"));
 }
 
+async function testToolDecisionTimeoutFallsBackToDirectAnswer() {
+  const requests = [];
+  sandbox.fetch = async (url, options = {}) => {
+    if (String(url).endsWith("/models")) {
+      const data = { data: [{ id: "tool-model" }] };
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        text: async () => JSON.stringify(data),
+      };
+    }
+    const body = JSON.parse(options.body || "{}");
+    requests.push(body);
+    if (requests.length === 1) {
+      const error = new Error("This operation was aborted");
+      error.name = "AbortError";
+      throw error;
+    }
+    const data = {
+      choices: [
+        {
+          message: {
+            role: "assistant",
+            content: "Add the blood splash as a simple red material detail first.",
+          },
+        },
+      ],
+    };
+    return {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      json: async () => data,
+      text: async () => JSON.stringify(data),
+      headers: { get: () => "application/json" },
+    };
+  };
+
+  const finalText = await runLmStudioCompletionWithTools({
+    settings: {
+      lmStudioBaseUrl: "http://localhost:1234/v1",
+      model: "auto",
+      responseMaxTokens: 8000,
+      contextLimitTokens: 70000,
+      toolUse: "AUTO",
+    },
+    payload: buildChatPayload({
+      prompt: "How do I make a blood splash design?",
+      context: bridgedContext,
+      chat: { compactedSummary: "", messages: [] },
+      settings: { model: "auto", responseMaxTokens: 8000, toolUse: "AUTO" },
+    }),
+    prompt: "How do I make a blood splash design?",
+    context: bridgedContext,
+    chat: { compactedSummary: "", messages: [] },
+    onDelta() {},
+  });
+
+  assert.strictEqual(requests.length, 2);
+  assert(Array.isArray(requests[0].tools));
+  assert.strictEqual(requests[0].max_tokens, 650);
+  assert(!Object.prototype.hasOwnProperty.call(requests[1], "tools"));
+  assert.strictEqual(requests[1].stream, true);
+  assert.strictEqual(requests[1].max_tokens, 6000);
+  assert(finalText.includes("blood splash"));
+}
+
 testToolCallLoop()
+  .then(testToolDecisionTimeoutFallsBackToDirectAnswer)
   .then(() => {
     console.log("Prompt packet diagnostic test passed.");
   })

@@ -46,7 +46,7 @@ const defaultBackendSettings: BackendSettings = {
   bridgeUrl: "auto",
   lmStudioBaseUrl: "http://localhost:1234/v1",
   model: "auto",
-  responseMaxTokens: 8000,
+  responseMaxTokens: 2200,
   contextLimitTokens: 70000,
   toolUse: "AUTO",
   userInstructions: "",
@@ -1310,7 +1310,7 @@ function SettingsPage({
           <input
             type="number"
             min="256"
-            max="32000"
+            max="6000"
             step="256"
             value={backendSettings.responseMaxTokens}
             onChange={(event) => updateBackendSettings({ responseMaxTokens: Number(event.target.value) })}

@@ -4,7 +4,11 @@ const path = require("path");
 
 const DEFAULT_BRIDGE_URL = "http://127.0.0.1:8765";
 const DEFAULT_LM_STUDIO_BASE_URL = "http://localhost:1234/v1";
-const DEFAULT_RESPONSE_MAX_TOKENS = 8000;
+const DEFAULT_RESPONSE_MAX_TOKENS = 2200;
+const MAX_RESPONSE_MAX_TOKENS = 6000;
+const TOOL_DECISION_MAX_TOKENS = 650;
+const LM_STUDIO_COMPLETION_TIMEOUT_MS = 120000;
+const TOOL_DECISION_TIMEOUT_MS = 30000;
 const DEFAULT_CONTEXT_LIMIT_TOKENS = 70000;
 const DEFAULT_AUTO_COMPACT_RATIO = 0.95;
 const DEFAULT_TOOL_RESERVE_TOKENS = 3500;
@@ -60,6 +64,8 @@ Truth ladder:
 - Project Brief / truth.md is optional memory. It is normally omitted; use it only when it is included or when the user asks about the project goal, requirements, constraints, or truth.md.
 - Use read-only tools when you need extra references. Local official docs are the authority for stable Blender facts; web results are allowed for current info, community workflow discoveries, add-ons, names, and examples, but label them by source quality.
 - Use workflow and troubleshooting tool results as optional background notes, not a script or route. Ignore any note that does not fit the user's latest prompt, screenshot, or live scene facts.
+- For ordinary tutoring questions, do not spend extended hidden reasoning deciding whether to use a tool. Make a fast choice: answer directly from screenshot and scene context when enough, or request one relevant read-only tool immediately.
+- For open-ended visual effect, design, material, or workflow questions where examples would materially help, prefer one concise workflow_notes or web_search call over long internal deliberation.
 - Use model memory only as background, never as stronger evidence than provided Blender facts.
 - If the evidence is incomplete, say it naturally: "I can see...", "I'm inferring...", or "I can't tell from the current Blendy context."
 - Do not invent Blender state, UI locations, file contents, object names, measurements, or actions you cannot verify from the provided context.
@@ -152,6 +158,30 @@ function defaultSettings() {
     userInstructions: "",
     knowledgeMode: KNOWLEDGE_MODE_LOCAL_AUTO_WEB,
   };
+}
+
+function normalizedResponseMaxTokens(value) {
+  const raw = Number(value || DEFAULT_RESPONSE_MAX_TOKENS);
+  if (!Number.isFinite(raw)) {
+    return DEFAULT_RESPONSE_MAX_TOKENS;
+  }
+  return Math.min(MAX_RESPONSE_MAX_TOKENS, Math.max(256, Math.round(raw)));
+}
+
+function normalizedBackendSettings(settings = {}) {
+  const next = {
+    ...defaultSettings(),
+    ...settings,
+  };
+  next.responseMaxTokens = normalizedResponseMaxTokens(next.responseMaxTokens);
+  next.contextLimitTokens = Math.max(1000, Number(next.contextLimitTokens || DEFAULT_CONTEXT_LIMIT_TOKENS));
+  next.toolUse = normalizeToolUse(next.toolUse);
+  next.userInstructions = normalizedUserInstructions(next);
+  return next;
+}
+
+function isAbortError(error) {
+  return error?.name === "AbortError" || /aborted|aborterror/i.test(error?.message || String(error || ""));
 }
 
 function normalizedUserInstructions(settings = {}) {
@@ -306,7 +336,7 @@ const BLENDY_TOOL_DEFINITIONS = [
     type: "function",
     function: {
       name: "web_search",
-      description: "Search the public web for current, external, or non-local information. Use for latest releases, add-ons, names, and current facts.",
+      description: "Search the public web for current, external, or non-local information. Use for latest releases, add-ons, names, current facts, visual effect examples, community workflow discoveries, and design references.",
       parameters: {
         type: "object",
         properties: {
@@ -1320,10 +1350,7 @@ function settingsPath(userDataPath) {
 }
 
 function loadBackendSettings(userDataPath) {
-  return {
-    ...defaultSettings(),
-    ...readJson(settingsPath(userDataPath), {}),
-  };
+  return normalizedBackendSettings(readJson(settingsPath(userDataPath), {}));
 }
 
 function bridgeDiscoveryPaths(userDataPath) {
@@ -1384,10 +1411,10 @@ function resolveBridgeUrl(settings, userDataPath) {
 }
 
 function saveBackendSettings(userDataPath, partial) {
-  const next = {
+  const next = normalizedBackendSettings({
     ...loadBackendSettings(userDataPath),
     ...partial,
-  };
+  });
   writeJson(settingsPath(userDataPath), next);
   return next;
 }
@@ -1658,7 +1685,7 @@ function buildChatPayload({ prompt, context, chat, settings, includeTools = true
       { role: "user", content: userContent },
     ],
     temperature: 0.4,
-    max_tokens: Math.max(256, Number(settings.responseMaxTokens || DEFAULT_RESPONSE_MAX_TOKENS)),
+    max_tokens: normalizedResponseMaxTokens(settings.responseMaxTokens),
     stream: true,
   };
   if (includeTools && toolUseEnabled(settings)) {
@@ -1825,14 +1852,21 @@ async function repairBlankVisibleAnswer({ settings, payload, onDelta }) {
       },
     ],
     temperature: 0.2,
-    max_tokens: Math.min(2000, Math.max(512, Number(payload.max_tokens || 1200))),
+    max_tokens: Math.min(1600, Math.max(512, Number(payload.max_tokens || 1200))),
     stream: false,
   };
-  const response = await fetch(`${baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(repairPayload),
-  });
+  const timeout = withTimeout(LM_STUDIO_COMPLETION_TIMEOUT_MS);
+  let response;
+  try {
+    response = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(repairPayload),
+      signal: timeout.controller.signal,
+    });
+  } finally {
+    timeout.done();
+  }
   if (!response.ok) {
     const detail = await response.text();
     throw new Error(`HTTP ${response.status} from LM Studio repair request: ${detail || response.statusText}`);
@@ -1851,14 +1885,22 @@ async function repairBlankVisibleAnswer({ settings, payload, onDelta }) {
 async function runLmStudioCompletion({ settings, payload, onDelta, beforeSend }) {
   const baseUrl = normalizeBaseUrl(settings.lmStudioBaseUrl, DEFAULT_LM_STUDIO_BASE_URL);
   payload.model = await resolveModel(settings);
+  payload.max_tokens = normalizedResponseMaxTokens(payload.max_tokens);
   if (beforeSend) {
     beforeSend(payload);
   }
-  const response = await fetch(`${baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  const timeout = withTimeout(LM_STUDIO_COMPLETION_TIMEOUT_MS);
+  let response;
+  try {
+    response = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: timeout.controller.signal,
+    });
+  } finally {
+    timeout.done();
+  }
   if (!response.ok) {
     const detail = await response.text();
     throw new Error(`HTTP ${response.status} from LM Studio: ${detail || response.statusText}`);
@@ -1924,13 +1966,21 @@ async function runLmStudioCompletion({ settings, payload, onDelta, beforeSend })
   return repairBlankVisibleAnswer({ settings, payload, onDelta });
 }
 
-async function runLmStudioJsonMessage({ settings, payload }) {
+async function runLmStudioJsonMessage({ settings, payload, timeoutMs = LM_STUDIO_COMPLETION_TIMEOUT_MS }) {
   const baseUrl = normalizeBaseUrl(settings.lmStudioBaseUrl, DEFAULT_LM_STUDIO_BASE_URL);
-  const response = await fetch(`${baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  payload.max_tokens = normalizedResponseMaxTokens(payload.max_tokens);
+  const timeout = withTimeout(timeoutMs);
+  let response;
+  try {
+    response = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: timeout.controller.signal,
+    });
+  } finally {
+    timeout.done();
+  }
   if (!response.ok) {
     const detail = await response.text();
     throw new Error(`HTTP ${response.status} from LM Studio: ${detail || response.statusText}`);
@@ -1990,11 +2040,36 @@ async function runLmStudioCompletionWithTools({
       ...basePayload,
       messages,
       stream: false,
+      temperature: 0.2,
+      max_tokens: Math.min(TOOL_DECISION_MAX_TOKENS, normalizedResponseMaxTokens(settings.responseMaxTokens)),
       tools: BLENDY_TOOL_DEFINITIONS,
       tool_choice: "auto",
     };
     onDiagnostic?.(requestPayload, toolTrace);
-    const message = await runLmStudioJsonMessage({ settings, payload: requestPayload });
+    let message;
+    try {
+      message = await runLmStudioJsonMessage({ settings, payload: requestPayload, timeoutMs: TOOL_DECISION_TIMEOUT_MS });
+    } catch (error) {
+      if (!isAbortError(error) || round > 0) {
+        throw error;
+      }
+      toolTrace.push({
+        round: round + 1,
+        call: { id: "", name: "tool_decision_timeout", arguments: "{}" },
+        ok: false,
+        resultPreview: "Tool-decision request timed out, so Blendy fell back to a direct streamed answer without tools for this turn.",
+      });
+      const fallbackPayload = {
+        ...basePayload,
+        messages,
+        stream: true,
+        max_tokens: normalizedResponseMaxTokens(settings.responseMaxTokens),
+      };
+      delete fallbackPayload.tools;
+      delete fallbackPayload.tool_choice;
+      onDiagnostic?.(fallbackPayload, toolTrace);
+      return runLmStudioCompletion({ settings, payload: fallbackPayload, onDelta });
+    }
     const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
 
     if (!toolCalls.length) {
@@ -2085,6 +2160,9 @@ async function runLmStudioCompletionWithTools({
 
 function friendlyLmError(error) {
   const message = error.message || String(error);
+  if (isAbortError(error)) {
+    return "LM Studio spent too long thinking before returning an answer. I stopped the request so Blendy would not hang. Try sending again, or use a lower-thinking/non-reasoning model preset for fast tutoring prompts.";
+  }
   if (/fetch failed|ECONNREFUSED|Could not connect|Failed to fetch/i.test(message)) {
     return "I could not reach LM Studio. Start LM Studio's local server when you are ready, then send again.";
   }
