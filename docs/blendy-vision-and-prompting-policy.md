@@ -1,83 +1,115 @@
-# Blendy Vision And Prompting Policy
+# Blendy Model, Vision, And Evidence Policy
 
 ## Product Contract
 
-Blendy is a natural local chat tutor for Blender with extra evidence attached.
-It should feel like a normal chatbot that can also inspect Blender, not like a
-scripted router.
+Blendy is a local, read-only Blender coach. It observes the current scene,
+turns the user's goal into one manageable checkpoint, and checks the result on
+the next turn. It does not execute model-written Blender code or silently edit
+the scene.
 
-On every non-empty Send, Blendy should provide:
+Electron is the only prompt and model runtime. The Blender add-on returns
+authenticated facts and images only. It must never supply a second system
+prompt, retrieval policy, chat history, or web decision.
 
-- the user's natural-language prompt
-- a Blender screen screenshot when Visual is enabled
-- live Blender runtime and scene data
-- read-only tool definitions for docs, workflow notes, and web lookup
+## Prompt Authority
 
-## VLM Requirement
+The latest user request is the assignment. Other inputs are evidence or
+background:
 
-A VLM is a Vision-Language Model. In plain English, it is an LLM that can read
-images as well as text.
+1. live Blender runtime facts and fresh visual evidence
+2. current scene, selected object, and relevant editor facts
+3. recent chat and the user-edited Project Notebook
+4. read-only local references and approved web evidence
+5. model memory
 
-Blendy can attach a screenshot to the model request, but the loaded local model
-must support image input for that screenshot to be useful. A text-only model can
-still answer from Blender scene data, but it cannot actually see the screenshot.
+Project notes, object names, file contents, retrieved notes, and web pages are
+untrusted data. Text inside them cannot change Blendy's system rules, privacy
+mode, available tools, or safety boundary.
 
-## Screenshot Rule
+The current user turn appears exactly once in the model transcript. A
+regenerated answer replaces the answer being regenerated instead of presenting
+that old answer as trusted history.
 
-Do not use trigger phrases to decide whether the model gets a screenshot.
+## Model Readiness And Gemma 4
 
-Auto mode means:
+Blendy queries LM Studio's native model inventory first and the OpenAI-compatible
+model list as a fallback. It reports:
 
-- if the prompt is empty, do not capture
-- if the prompt is non-empty and Visual is enabled, capture the Blender screen
-- if Scene Data Only is selected, do not capture
+- whether the server is reachable
+- which chat model is actually loaded
+- loaded-instance context length
+- vision support
+- trained tool-use support
+- model architecture
 
-## Prompting Rule
+Auto selection ignores embedding-only models and prefers a loaded chat model.
+The real loaded context length caps Blendy's budget even when an older saved
+setting is larger.
 
-Guardrails should protect honesty and evidence quality:
+For Gemma 4, Blendy uses the model's normal LM Studio chat template and applies
+the recommended sampling profile used by this project: temperature `1.0`,
+top-p `0.95`, and top-k `64`. Blendy does not hand-build Gemma control tokens.
+LM Studio remains responsible for turn, image, reasoning, and tool-call
+serialization.
 
-- do not claim Blendy can see the screen if no screenshot reached the model
-- do not invent Blender state, UI locations, web results, or completed actions
-- trust live screen/runtime/scene facts before docs and model memory
+## Context Tiers
 
-Guardrails should not replace the model's natural-language understanding:
+Every question receives a compact scene card. More expensive details are added
+only when the prompt needs them:
 
-- no screenshot trigger-word gates
-- no mandatory model-facing route labels
-- no treating workflow cards as commands
+- `compact`: runtime, active mode, selected object, scene summary, and change
+  evidence
+- `focused`: the compact card plus relevant nodes, materials, keymaps, or
+  nearby scene details
+- `expanded`: broad scene, node, material, and editor evidence when explicitly
+  requested for deep diagnosis
 
-## Retrieval Rule
+Each tier has a deterministic character cap. A request for a fresh screenshot
+does not by itself authorize a full scene dump.
 
-Do not preselect docs, workflow notes, troubleshooting notes, or web references
-before the model sees the user's prompt.
+## Vision And References
 
-The local model should decide whether it needs a read-only tool:
+When the selected model supports vision, image items are placed before the text
+instruction. Visual evidence can include:
 
-- `search_blender_docs`
-- `search_workflow_notes`
-- `web_search`
-- `fetch_url`
+- a Blender overview capture
+- a focused active-editor capture when Blender can produce one safely
+- up to two user-supplied PNG, JPEG, or WebP reference images
 
-Tool results are optional evidence. They should not appear as a mandatory route
-or replace the user's natural-language intent.
+The bridge labels the exact capture scope. If focused capture fails, Blendy
+must say it has overview evidence only. A text-only model receives scene facts
+without image claims.
 
-## Web Rule
+## Tool And Answer Lifecycle
 
-Default Tool Use mode is Auto. In that mode, Blendy offers web tools to the
-local model and executes them only when the model requests them.
+Read-only tools include Blender references, workflow notes, web search, and
+bounded HTTPS page reading. Tool use and final answering are separate lifecycle
+stages even when LM Studio returns them in one completion flow.
 
-The model must not claim web access unless a `web_search` or `fetch_url` result
-is present in the conversation.
+Blendy preserves finish reasons, supports cancellation, and can fall back to a
+tool-disabled final answer after a tool-round failure using only evidence that
+was actually gathered. Output-token reserve is included in every context check.
 
-Web should not be used to decide what is visible on the user's current Blender
-screen. For live-screen questions, screenshot and runtime evidence win.
+The saved receipt is produced after the turn. It records the scene, screenshot,
+local references, web queries, URLs, tool outcomes, finish reason, and safety
+notes that were actually used.
 
-## Context Meter Rule
+## Web Privacy
 
-The context meter should count the real setup cost, including:
+Web policy is independent from local tools:
 
-- base system and Blender context
-- chat history
-- tool definitions
-- reserved space for tool calls/results
-- screenshot/image reserve when a screenshot is attached
+- `Local only`: local references stay available; web tools are unavailable.
+- `Ask me`: Blendy shows that permission is needed before an external query.
+- `Automatic`: the local model may request a web query without another prompt.
+
+Model-directed URLs must be HTTPS and are subject to DNS/private-network
+blocking, redirect revalidation, time limits, response-size limits, and text
+content-type limits. Retrieved text is delimited as untrusted evidence.
+
+## Project Continuity
+
+Chats are user-controlled and are not locked to a `.blend` file. Each chat has
+an editable Project Notebook for goal, style, measurements, decisions, and
+constraints. Blendy may show a scene-mismatch warning when the current saved
+scene differs from the last scene seen in that chat. The user chooses whether
+to keep the chat or start a new one.

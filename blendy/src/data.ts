@@ -2,7 +2,6 @@ import type { ContextSnapshot, Message } from "./types";
 
 export const contextSnapshot: ContextSnapshot = {
   project: "Example Blender project",
-  projectBriefPath: "Project Brief lives beside the user's saved .blend file",
   appDataPath: "Stored in the user's Blendy app data folder",
   units: "Millimeters",
   selectedObject: "Cube",
@@ -27,8 +26,8 @@ export const contextSnapshot: ContextSnapshot = {
   contextLimitTokens: 70000,
   contextPercent: 9,
   promptPacketPath: "",
-  knowledgeMode: "LOCAL_AUTO_WEB",
-  knowledgeModeLabel: "Local + Auto Web",
+  knowledgeMode: "ASK_BEFORE_WEB",
+  knowledgeModeLabel: "Ask before web",
   docsIndexStatus: "official-seed-v1; official Blender docs entries available",
   lastWebLookupStatus: "Not checked in mock mode.",
   knowledgeConfidence: 0.86,
@@ -47,8 +46,7 @@ export const contextSnapshot: ContextSnapshot = {
       confidence: 0.86,
     },
   ],
-  brief:
-    "Beginner hard-surface modeling project. One clear checkpoint at a time. User works in millimeters.",
+  brief: "",
 };
 
 export const seedMessages: Message[] = [

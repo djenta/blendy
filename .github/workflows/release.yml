@@ -1,0 +1,114 @@
+name: Publish Windows release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source without write credentials
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: blendy/package-lock.json
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+
+      - name: Verify tag matches package version
+        shell: pwsh
+        run: |
+          $version = (Get-Content blendy/package.json | ConvertFrom-Json).version
+          if ($env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Tag $env:GITHUB_REF_NAME does not match package version $version."
+          }
+          if (-not (Test-Path "docs/releases/v$version.md")) {
+            throw "Release notes are missing for v$version."
+          }
+
+      - name: Install desktop dependencies
+        working-directory: blendy
+        run: npm ci
+
+      - name: Run project checks
+        working-directory: blendy
+        run: npm test
+
+      - name: Check desktop and shipped runtime dependencies
+        working-directory: blendy
+        run: npm audit --audit-level=high
+
+      - name: Build Windows installer
+        working-directory: blendy
+        run: npm run dist
+
+      - name: Assemble release bundle
+        shell: pwsh
+        run: |
+          $version = (Get-Content blendy/package.json | ConvertFrom-Json).version
+          $bundle = New-Item -ItemType Directory -Force -Path release-bundle
+          $installer = "blendy/release/Blendy Local AI Tutor Setup $version.exe"
+          Copy-Item $installer $bundle.FullName
+          New-Item -ItemType Directory -Force -Path release-addon | Out-Null
+          Copy-Item local_ai_chat release-addon/local_ai_chat -Recurse -Force
+          Get-ChildItem release-addon -Directory -Filter __pycache__ -Recurse | Remove-Item -Recurse -Force
+          Get-ChildItem release-addon -File -Filter *.pyc -Recurse | Remove-Item -Force
+          Compress-Archive -Path release-addon/local_ai_chat -DestinationPath "$($bundle.FullName)/local_ai_chat.zip" -Force
+          Copy-Item blendy/package.json "$($bundle.FullName)/package.json"
+          Copy-Item "docs/releases/v$version.md" "$($bundle.FullName)/release-notes.md"
+          $installerHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -LiteralPath "$($bundle.FullName)/SHA256SUMS.txt" -Value "$installerHash  Blendy Local AI Tutor Setup $version.exe" -Encoding ASCII
+
+      - name: Upload verified release bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: blendy-release
+          path: release-bundle/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download verified release bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: blendy-release
+          path: release-bundle
+
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = (Get-Content release-bundle/package.json | ConvertFrom-Json).version
+          if ($env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Tag $env:GITHUB_REF_NAME does not match verified package version $version."
+          }
+          $installer = Get-ChildItem release-bundle -Filter "*.exe" | Select-Object -First 1
+          if (-not $installer) {
+            throw "The verified installer is missing."
+          }
+          gh release create $env:GITHUB_REF_NAME "$($installer.FullName)#Windows installer" "release-bundle/local_ai_chat.zip#Manual Blender add-on" "release-bundle/SHA256SUMS.txt#SHA-256 checksums" --verify-tag --title "Blendy $version" --notes-file "release-bundle/release-notes.md"

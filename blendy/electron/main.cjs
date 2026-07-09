@@ -1,6 +1,7 @@
-const { app, BrowserWindow, ipcMain, screen } = require("electron");
+const { app, BrowserWindow, ipcMain, screen, shell } = require("electron");
 const fs = require("fs");
 const path = require("path");
+const { pathToFileURL } = require("url");
 const { registerBackendIpc } = require("./backend.cjs");
 
 const isDev = !app.isPackaged;
@@ -106,8 +107,32 @@ function createWindow() {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
     },
   });
+
+  const packagedRendererUrl = pathToFileURL(path.join(__dirname, "../dist/index.html")).toString();
+  const isTrustedRendererUrl = (url) => isDev
+    ? /^http:\/\/(127\.0\.0\.1|localhost):5187(?:\/|$)/.test(String(url || ""))
+    : String(url || "").split(/[?#]/)[0] === packagedRendererUrl;
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol === "https:" && !parsed.username && !parsed.password) {
+        void shell.openExternal(parsed.toString()).catch(() => {});
+      }
+    } catch (_error) {
+      // Invalid and non-HTTPS links remain blocked.
+    }
+    return { action: "deny" };
+  });
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    if (!isTrustedRendererUrl(url)) {
+      event.preventDefault();
+    }
+  });
+  mainWindow.webContents.on("will-attach-webview", (event) => event.preventDefault());
 
   mainWindow.setAlwaysOnTop(saved.pinned !== false, "screen-saver");
 
@@ -162,11 +187,19 @@ app.on("window-all-closed", () => {
   }
 });
 
-ipcMain.handle("window:get-pinned", () => {
+function assertMainWindowSender(event) {
+  if (!mainWindow || event.sender !== mainWindow.webContents) {
+    throw new Error("Blendy blocked a window request from an unexpected page.");
+  }
+}
+
+ipcMain.handle("window:get-pinned", (event) => {
+  assertMainWindowSender(event);
   return mainWindow?.isAlwaysOnTop() ?? true;
 });
 
-ipcMain.handle("window:set-pinned", (_event, pinned) => {
+ipcMain.handle("window:set-pinned", (event, pinned) => {
+  assertMainWindowSender(event);
   if (!mainWindow) {
     return false;
   }
@@ -175,10 +208,12 @@ ipcMain.handle("window:set-pinned", (_event, pinned) => {
   return mainWindow.isAlwaysOnTop();
 });
 
-ipcMain.handle("window:minimize", () => {
+ipcMain.handle("window:minimize", (event) => {
+  assertMainWindowSender(event);
   mainWindow?.minimize();
 });
 
-ipcMain.handle("window:close", () => {
+ipcMain.handle("window:close", (event) => {
+  assertMainWindowSender(event);
   mainWindow?.close();
 });
