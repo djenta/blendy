@@ -18,7 +18,15 @@ interface Window {
       prompt: string;
       backendSettings?: Partial<import("./types").BackendSettings>;
       chatId?: string;
+      referenceImages?: string[];
     }) => Promise<import("./types").SendMessageResult>;
+    getModelStatus?: () => Promise<import("./types").ModelStatus>;
+    cancelMessage?: (request: { messageId: string }) => Promise<{ ok?: boolean; messageId?: string }>;
+    saveChatNotebook?: (request: {
+      chatId: string;
+      text: string;
+    }) => Promise<import("./types").ProjectNotebook | { projectNotebook?: import("./types").ProjectNotebook }>;
+    acknowledgeChatScene?: (request: { chatId: string }) => Promise<import("./types").ProjectNotebook | { projectNotebook?: import("./types").ProjectNotebook }>;
     regenerateLast: (request: {
       backendSettings?: Partial<import("./types").BackendSettings>;
       chatId?: string;
@@ -45,7 +53,6 @@ interface Window {
     saveBackendSettings: (
       settings: Partial<import("./types").BackendSettings>,
     ) => Promise<import("./types").BackendSettings>;
-    openProjectBrief: (truthPath: string) => Promise<{ ok: boolean; error?: string }>;
     openDiagnosticFile: (filePath: string) => Promise<{ ok: boolean; error?: string }>;
     onChatEvent: (callback: (event: import("./types").ChatEvent) => void) => () => void;
   };

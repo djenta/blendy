@@ -2,7 +2,6 @@ import {
   Check,
   ChevronLeft,
   Eye,
-  FileText,
   Image,
   Info,
   Menu,
@@ -22,6 +21,15 @@ import {
 import { KeyboardEvent, useEffect, useRef, useState } from "react";
 import logoUrl from "./assets/blendy-header-mark.png";
 import { contextSnapshot as mockContextSnapshot, seedMessages } from "./data";
+import {
+  CurrentCheckpoint,
+  EmptyStudioState,
+  ProjectNotebookEditor,
+  ReadinessPanel,
+  ReferenceAttachmentTray,
+  SceneMismatchBanner,
+  type ReferenceImage,
+} from "./StudioCoach";
 import type {
   AppSettings,
   AssistantReceipt,
@@ -29,8 +37,11 @@ import type {
   ChatEvent,
   ChatSession,
   ContextSnapshot,
+  KnowledgeMode,
   Message,
+  ModelStatus,
   PageName,
+  ProjectNotebook,
   ThemeName,
   ToolUseMode,
 } from "./types";
@@ -46,10 +57,11 @@ const defaultBackendSettings: BackendSettings = {
   bridgeUrl: "auto",
   lmStudioBaseUrl: "http://localhost:1234/v1",
   model: "auto",
-  responseMaxTokens: 8000,
+  responseMaxTokens: 2200,
   contextLimitTokens: 70000,
   toolUse: "AUTO",
-  knowledgeMode: "LOCAL_AUTO_WEB",
+  userInstructions: "",
+  knowledgeMode: "ASK_BEFORE_WEB",
 };
 
 const CONTEXT_LIMIT_MIN_TOKENS = 10000;
@@ -108,6 +120,62 @@ function contextButtonLabel(contextSnapshot: ContextSnapshot): string {
   return `Context ${formatTokens(used)} / ${formatTokens(limit)}. Conversation ${formatTokens(conversation)}. Tools ${formatTokens(tools)}. Screenshot ${formatTokens(screenshot)}.`;
 }
 
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
+    reader.readAsDataURL(file);
+  });
+}
+
+function receiptContextLabel(receipt?: AssistantReceipt, toolTrace?: AssistantReceipt["toolTrace"]) {
+  const trace = receipt?.toolTrace || toolTrace || [];
+  const usedScene = receipt?.usedScene || trace.some((entry) => entry.sceneUsed || /scene|context/i.test(entry.call?.name || entry.name || ""));
+  const usedScreenshot = receipt?.usedScreenshot || trace.some((entry) => entry.screenshotUsed || /screen|visual|image/i.test(entry.call?.name || entry.name || ""));
+  const tools = trace.map((entry) => entry.call?.name || entry.name).filter(Boolean);
+  const parts = [
+    usedScene ? "live scene" : "available context",
+    usedScreenshot ? "fresh screen" : "",
+    tools.length ? `${tools.length} local check${tools.length === 1 ? "" : "s"}` : "",
+  ].filter(Boolean);
+  return `Used: ${parts.join(" + ")}`;
+}
+
+function normalizeEventReceipt(
+  incoming?: AssistantReceipt | { line?: string; details?: AssistantReceipt },
+  toolTrace?: AssistantReceipt["toolTrace"],
+  finishReason?: string,
+  eventSources?: Array<{ title?: string; url?: string }>,
+) {
+  const wrapped = incoming && "details" in incoming ? incoming : undefined;
+  const details = wrapped?.details || (incoming as AssistantReceipt | undefined) || {};
+  const fallbackSources = [
+    ...(eventSources || []),
+    ...((details.web?.sources || []).map((source) => ({ title: source.title, url: source.url }))),
+  ].filter((source) => source.url);
+  const receipt: AssistantReceipt = {
+    ...details,
+    toolTrace: details.toolTrace || toolTrace,
+    finishReason: details.finishReason || finishReason,
+    sources: details.sources?.length ? details.sources : fallbackSources,
+  };
+  return {
+    receipt,
+    line: wrapped?.line || receiptContextLabel(receipt, toolTrace),
+  };
+}
+
+function operationNotice(title: string, error: unknown, recovery: string): Message {
+  const detail = error instanceof Error ? error.message : String(error || "Unknown error");
+  return {
+    id: crypto.randomUUID(),
+    role: "event",
+    content: `${title}\n${detail}\n${recovery}`,
+    status: "failed",
+  };
+}
+
 function App() {
   const [settings, setSettings] = useState<AppSettings>(loadSettings);
   const [page, setPage] = useState<PageName>("chat");
@@ -116,6 +184,14 @@ function App() {
   const [messages, setMessages] = useState<Message[]>(window.blendyApp ? [] : seedMessages);
   const [contextSnapshot, setContextSnapshot] = useState<ContextSnapshot>(mockContextSnapshot);
   const [backendSettings, setBackendSettings] = useState<BackendSettings>(defaultBackendSettings);
+  const [modelStatus, setModelStatus] = useState<ModelStatus | undefined>(undefined);
+  const [projectNotebook, setProjectNotebook] = useState<ProjectNotebook>({ text: "" });
+  const [notebookDraft, setNotebookDraft] = useState("");
+  const [notebookSaving, setNotebookSaving] = useState(false);
+  const [notebookSaved, setNotebookSaved] = useState(true);
+  const [referenceImages, setReferenceImages] = useState<ReferenceImage[]>([]);
+  const [referenceError, setReferenceError] = useState("");
+  const [generationStage, setGenerationStage] = useState<{ stage: string; label: string } | undefined>(undefined);
   const [chatPath, setChatPath] = useState("");
   const [prompt, setPrompt] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
@@ -137,11 +213,39 @@ function App() {
   const messageNodeRefs = useRef<Record<string, HTMLElement | null>>({});
   const autoFollowRef = useRef(true);
   const activeGeneratedMessageIdRef = useRef<string | null>(null);
+  const activeChatIdRef = useRef("");
+  const backendSettingsRef = useRef(backendSettings);
+  const lastSubmittedPromptRef = useRef("");
+  const promptRef = useRef("");
+  const notebookSavedRef = useRef(true);
   const generatedSnapTokenRef = useRef(0);
   const programmaticScrollUntilRef = useRef(0);
   const messageSignatureRef = useRef("");
   const savedChatScrollTopRef = useRef(0);
   const restoreChatScrollRef = useRef(false);
+
+  useEffect(() => {
+    promptRef.current = prompt;
+  }, [prompt]);
+
+  useEffect(() => {
+    notebookSavedRef.current = notebookSaved;
+  }, [notebookSaved]);
+
+  useEffect(() => {
+    activeChatIdRef.current = activeChatId;
+  }, [activeChatId]);
+
+  useEffect(() => {
+    backendSettingsRef.current = backendSettings;
+  }, [backendSettings]);
+
+  useEffect(() => {
+    if (modelStatus?.vision === false && referenceImages.length) {
+      setReferenceImages([]);
+      setReferenceError("The loaded model cannot read images. Use scene data or load a vision-capable model.");
+    }
+  }, [modelStatus?.vision, referenceImages.length]);
 
   useEffect(() => {
     const themeFont = settings.theme === "sprint" ? "fraktion" : "geist";
@@ -169,6 +273,14 @@ function App() {
         }
         setContextSnapshot(state.context);
         setBackendSettings({ ...defaultBackendSettings, ...state.backendSettings });
+        if (state.modelStatus) {
+          setModelStatus(state.modelStatus);
+        }
+        if (state.projectNotebook) {
+          setProjectNotebook(state.projectNotebook);
+          setNotebookDraft(state.projectNotebook.text || "");
+          setNotebookSaved(true);
+        }
         applyDiagnostics(state.diagnostics);
         setMessages(state.messages);
       })
@@ -182,6 +294,13 @@ function App() {
           bridgeStatus: error instanceof Error ? error.message : String(error),
         }));
       });
+
+    window.blendyApp
+      .getModelStatus?.()
+      .then((status) => {
+        if (!cancelled) setModelStatus(status);
+      })
+      .catch(() => undefined);
 
     const unsubscribe = window.blendyApp.onChatEvent((event) => {
       handleChatEvent(event);
@@ -205,9 +324,9 @@ function App() {
       if (activeMessage) {
         scheduleGeneratedReplySnap(
           activeGeneratedMessageId,
-          activeMessage.status === "done" || activeMessage.status === "failed",
+          activeMessage.status === "done" || activeMessage.status === "failed" || activeMessage.status === "cancelled",
         );
-        if (activeMessage.status === "done" || activeMessage.status === "failed") {
+        if (activeMessage.status === "done" || activeMessage.status === "failed" || activeMessage.status === "cancelled") {
           activeGeneratedMessageIdRef.current = null;
         }
         return;
@@ -215,6 +334,12 @@ function App() {
     }
 
     const node = scrollRef.current;
+    if (!messages.length && node) {
+      node.scrollTop = 0;
+      autoFollowRef.current = true;
+      setShowJumpLatest(false);
+      return;
+    }
     if (autoFollowRef.current && node) {
       node.scrollTop = node.scrollHeight;
       setShowJumpLatest(false);
@@ -242,6 +367,21 @@ function App() {
     window.addEventListener("pointerdown", handlePointerDown);
     return () => window.removeEventListener("pointerdown", handlePointerDown);
   }, [contextMenuOpen, chatMenuOpen]);
+
+  useEffect(() => {
+    if (!drawerOpen && !contextMenuOpen && !chatMenuOpen) return;
+    function handleEscape(event: globalThis.KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      setDrawerOpen(false);
+      setContextMenuOpen(false);
+      setChatMenuOpen(false);
+      setEditingChatId("");
+      setConfirmingDeleteChatId("");
+      requestComposerFocus();
+    }
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [chatMenuOpen, contextMenuOpen, drawerOpen]);
 
   function applyDiagnostics(diagnostics?: {
     chatPath?: string;
@@ -293,11 +433,10 @@ function App() {
   }
 
   function updateBackendSettings(partial: Partial<BackendSettings>) {
-    setBackendSettings((current) => {
-      const next = { ...current, ...partial };
-      window.blendyApp?.saveBackendSettings(next).catch(() => undefined);
-      return next;
-    });
+    const next = { ...backendSettingsRef.current, ...partial };
+    backendSettingsRef.current = next;
+    setBackendSettings(next);
+    window.blendyApp?.saveBackendSettings(next).catch(() => undefined);
   }
 
   function toggleSettingsPage() {
@@ -369,6 +508,11 @@ function App() {
   }
 
   function handleChatEvent(event: ChatEvent) {
+    if (event.type === "assistant-stage") {
+      activeGeneratedMessageIdRef.current = event.id;
+      setGenerationStage({ stage: event.stage, label: event.label });
+      return;
+    }
     if (event.type === "assistant-delta") {
       setMessages((current) =>
         current.map((message) =>
@@ -384,21 +528,40 @@ function App() {
       return;
     }
     if (event.type === "assistant-done") {
+      const normalized = normalizeEventReceipt(event.receipt, event.toolTrace, event.finishReason, event.sources);
       setMessages((current) =>
         current.map((message) =>
           message.id === event.id
             ? {
-                ...message,
-                content: event.content,
-                status: "done",
+              ...message,
+              content: event.content,
+              receipt: {
+                ...normalized.receipt,
+                summary: normalized.receipt.summary || (normalized.receipt.toolTrace?.length
+                  ? "Blendy checked current evidence before answering."
+                  : "Blendy answered from the available local context."),
+              },
+              context: normalized.line || message.context,
+              status: "done",
               }
             : message,
         ),
       );
       setIsGenerating(false);
+      setGenerationStage(undefined);
+      lastSubmittedPromptRef.current = "";
       setLatestDone(true);
       window.setTimeout(() => setLatestDone(false), 1500);
       refreshBackendState();
+      return;
+    }
+    if (event.type === "assistant-cancelled") {
+      setMessages((current) => current.map((message) => message.id === event.id
+        ? { ...message, content: event.content || "Stopped. Your question is ready to edit and try again.", status: "cancelled" }
+        : message));
+      if (!promptRef.current.trim() && lastSubmittedPromptRef.current) setPrompt(lastSubmittedPromptRef.current);
+      setIsGenerating(false);
+      setGenerationStage(undefined);
       return;
     }
     setMessages((current) =>
@@ -412,7 +575,11 @@ function App() {
           : message,
       ),
     );
+    if (!promptRef.current.trim() && lastSubmittedPromptRef.current) {
+      setPrompt(lastSubmittedPromptRef.current);
+    }
     setIsGenerating(false);
+    setGenerationStage(undefined);
     setLatestDone(true);
     window.setTimeout(() => setLatestDone(false), 1500);
     refreshBackendState();
@@ -424,9 +591,140 @@ function App() {
       .then((state) => {
         setContextSnapshot(state.context);
         setBackendSettings({ ...defaultBackendSettings, ...state.backendSettings });
+        if (state.modelStatus) setModelStatus(state.modelStatus);
+        if (state.projectNotebook) {
+          setProjectNotebook(state.projectNotebook);
+          if (notebookSavedRef.current) setNotebookDraft(state.projectNotebook.text || "");
+        }
         applyDiagnostics(state.diagnostics);
       })
       .catch(() => undefined);
+  }
+
+  async function refreshReadiness() {
+    if (!window.blendyApp) return;
+    const [statusResult, contextResult] = await Promise.allSettled([
+      window.blendyApp.getModelStatus?.(),
+      window.blendyApp.refreshContext({ chatId: activeChatId }),
+    ]);
+    if (statusResult.status === "fulfilled" && statusResult.value) setModelStatus(statusResult.value);
+    if (contextResult.status === "fulfilled") setContextSnapshot(contextResult.value);
+  }
+
+  async function stopGeneration() {
+    const messageId = activeGeneratedMessageIdRef.current;
+    if (!messageId || !window.blendyApp?.cancelMessage) {
+      return;
+    }
+    try {
+      const result = await window.blendyApp.cancelMessage({ messageId });
+      if (!result.ok) {
+        setGenerationStage({ stage: "finishing", label: "Finishing the current response" });
+        await refreshBackendState();
+        return;
+      }
+      setGenerationStage({ stage: "stopping", label: "Stopping safely" });
+    } catch (error) {
+      setMessages((current) => [
+        ...current,
+        operationNotice("Stop request did not reach the model", error, "The answer is still running. Wait for it to finish, then try again."),
+      ]);
+      setGenerationStage({ stage: "thinking", label: "The local model is still working" });
+    }
+  }
+
+  async function persistNotebookDraft() {
+    const nextText = notebookDraft.trim();
+    if (nextText === (projectNotebook.text || "").trim()) {
+      setNotebookSaved(true);
+      notebookSavedRef.current = true;
+      return true;
+    }
+    if (!window.blendyApp?.saveChatNotebook) {
+      return false;
+    }
+    const savingChatId = activeChatId;
+    setNotebookSaving(true);
+    try {
+      const result = await window.blendyApp.saveChatNotebook({ chatId: savingChatId, text: nextText });
+      const returned = result && "projectNotebook" in result ? result.projectNotebook : result;
+      const nextNotebook: ProjectNotebook = returned && "text" in returned
+        ? returned
+        : { ...projectNotebook, text: nextText };
+      if (activeChatIdRef.current === savingChatId) {
+        setProjectNotebook(nextNotebook);
+        setNotebookDraft(nextNotebook.text || "");
+        setNotebookSaved(true);
+        notebookSavedRef.current = true;
+      }
+      return true;
+    } catch (error) {
+      setNotebookSaved(false);
+      notebookSavedRef.current = false;
+      setMessages((current) => [
+        ...current,
+        operationNotice("Notebook was not saved", error, "Your text is still in the editor. Keep the workspace open and choose Save notebook again."),
+      ]);
+      return false;
+    } finally {
+      setNotebookSaving(false);
+    }
+  }
+
+  async function saveNotebook() {
+    await persistNotebookDraft();
+  }
+
+  async function keepChatForCurrentScene() {
+    if (!window.blendyApp?.acknowledgeChatScene) {
+      setMessages((current) => [
+        ...current,
+        operationNotice("Scene was not acknowledged", "This Blendy backend does not support scene acknowledgement.", "Restart Blendy after installing the current version."),
+      ]);
+      return;
+    }
+    try {
+      const result = await window.blendyApp.acknowledgeChatScene({ chatId: activeChatId });
+      const returned = result && "projectNotebook" in result ? result.projectNotebook : result;
+      if (returned && "text" in returned) setProjectNotebook(returned);
+    } catch (error) {
+      setMessages((current) => [
+        ...current,
+        operationNotice("Scene was not acknowledged", error, "The warning remains accurate. Try Keep chat again after Blender is ready."),
+      ]);
+    }
+  }
+
+  async function addReferenceFiles(files: FileList) {
+    setReferenceError("");
+    const remaining = Math.max(0, 2 - referenceImages.length);
+    if (!remaining) {
+      setReferenceError("Remove a reference before adding another. The limit is two.");
+      return;
+    }
+    const candidates = Array.from(files).slice(0, remaining);
+    const allowed = new Set(["image/png", "image/jpeg", "image/webp"]);
+    const invalid = candidates.find((file) => !allowed.has(file.type));
+    if (invalid) {
+      setReferenceError(`${invalid.name} is not a PNG, JPEG, or WebP image.`);
+      return;
+    }
+    const tooLarge = candidates.find((file) => file.size > 6 * 1024 * 1024);
+    if (tooLarge) {
+      setReferenceError(`${tooLarge.name} is over 6 MB. Choose a smaller image.`);
+      return;
+    }
+    try {
+      const loaded = await Promise.all(candidates.map(async (file) => ({
+        id: crypto.randomUUID(),
+        name: file.name,
+        dataUrl: await fileToDataUrl(file),
+      })));
+      setReferenceImages((current) => [...current, ...loaded].slice(0, 2));
+      if (files.length > remaining) setReferenceError("Only the first two reference images were added.");
+    } catch (error) {
+      setReferenceError(error instanceof Error ? error.message : "Blendy could not read that image. Try another file.");
+    }
   }
 
   async function togglePinned() {
@@ -463,14 +761,16 @@ function App() {
     node.scrollTop = node.scrollHeight;
   }
 
-  async function sendPrompt() {
-    const cleanPrompt = prompt.trim();
+  async function sendPrompt(promptOverride?: string) {
+    const cleanPrompt = (promptOverride ?? prompt).trim();
     if (!cleanPrompt || isGenerating) {
       return;
     }
 
-    setPrompt("");
+    if (promptOverride === undefined) setPrompt("");
+    lastSubmittedPromptRef.current = cleanPrompt;
     setIsGenerating(true);
+    setGenerationStage({ stage: "preparing", label: "Preparing scene context" });
     setLatestDone(false);
 
     if (!window.blendyApp) {
@@ -491,6 +791,7 @@ function App() {
         assistantMessage,
       ]);
       setIsGenerating(false);
+      setGenerationStage(undefined);
       return;
     }
 
@@ -499,10 +800,19 @@ function App() {
         prompt: cleanPrompt,
         backendSettings,
         chatId: activeChatId,
+        referenceImages: referenceImages.map((image) => image.dataUrl),
       });
       setContextSnapshot(result.context);
+      if (result.modelStatus) setModelStatus(result.modelStatus);
+      if (result.projectNotebook) {
+        setProjectNotebook(result.projectNotebook);
+        if (notebookSavedRef.current) setNotebookDraft(result.projectNotebook.text || "");
+      }
       applyDiagnostics(result.diagnostics);
       beginGeneratedReplySnap(result.assistantMessage.id);
+      setGenerationStage({ stage: "thinking", label: "Reading your project" });
+      setReferenceImages([]);
+      setReferenceError("");
       if (result.messages) {
         setMessages(result.messages);
       } else {
@@ -514,6 +824,7 @@ function App() {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      if (!promptRef.current.trim()) setPrompt(cleanPrompt);
       setMessages((current) => [
         ...current,
         {
@@ -524,6 +835,7 @@ function App() {
         },
       ]);
       setIsGenerating(false);
+      setGenerationStage(undefined);
     }
   }
 
@@ -546,6 +858,7 @@ function App() {
       return;
     }
     setIsGenerating(true);
+    setGenerationStage({ stage: "preparing", label: "Preparing a new answer" });
     setLatestDone(false);
     try {
       const result = await window.blendyApp.regenerateLast({
@@ -553,9 +866,12 @@ function App() {
         chatId: activeChatId,
       });
       setContextSnapshot(result.context);
+      if (result.modelStatus) setModelStatus(result.modelStatus);
+      if (result.projectNotebook) setProjectNotebook(result.projectNotebook);
       applyDiagnostics(result.diagnostics);
       beginGeneratedReplySnap(result.assistantMessage.id);
-      setMessages((current) => [...current, result.assistantMessage]);
+      setMessages((current) => result.messages?.length ? result.messages : [...current, result.assistantMessage]);
+      setGenerationStage({ stage: "thinking", label: "Reading your project" });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setMessages((current) => [
@@ -568,30 +884,32 @@ function App() {
         },
       ]);
       setIsGenerating(false);
+      setGenerationStage(undefined);
     }
   }
 
   async function compactNow() {
-    if (!window.blendyApp || isGenerating || isManagingContext) {
+    if (!window.blendyApp || isGenerating || isManagingContext || notebookSaving) {
       return;
     }
     setContextMenuOpen(false);
     setIsManagingContext(true);
     try {
+      if (!(await persistNotebookDraft())) return;
       const result = await window.blendyApp.compactChat({ backendSettings });
       setMessages(result.messages);
       setContextSnapshot(result.context);
+      if (result.modelStatus) setModelStatus(result.modelStatus);
+      if (result.projectNotebook) {
+        setProjectNotebook(result.projectNotebook);
+        setNotebookDraft(result.projectNotebook.text || "");
+        setNotebookSaved(true);
+      }
       applyDiagnostics(result.diagnostics);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
       setMessages((current) => [
         ...current,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: message,
-          status: "failed",
-        },
+        operationNotice("Conversation was not compacted", error, "Your chat is unchanged. Open the context menu and choose Compact now again."),
       ]);
     } finally {
       setIsManagingContext(false);
@@ -599,7 +917,7 @@ function App() {
   }
 
   async function freshChat() {
-    if (!window.blendyApp || isGenerating || isManagingContext) {
+    if (!window.blendyApp || isGenerating || isManagingContext || notebookSaving) {
       return;
     }
     setChatMenuOpen(false);
@@ -608,24 +926,26 @@ function App() {
     setConfirmingDeleteChatId("");
     setIsManagingContext(true);
     try {
+      if (!(await persistNotebookDraft())) return;
       const result = await window.blendyApp.freshChat({ backendSettings });
       setMessages(result.messages);
       setContextSnapshot(result.context);
+      if (result.modelStatus) setModelStatus(result.modelStatus);
+      const nextNotebook = result.projectNotebook || { text: "" };
+      setProjectNotebook(nextNotebook);
+      setNotebookDraft(nextNotebook.text || "");
+      setNotebookSaved(true);
+      setReferenceImages([]);
+      setReferenceError("");
       applyDiagnostics(result.diagnostics);
       setContextMenuOpen(false);
       setEditingChatId("");
       setPrompt("");
       requestComposerFocus();
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
       setMessages((current) => [
         ...current,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: message,
-          status: "failed",
-        },
+        operationNotice("New chat was not created", error, "Your current chat is unchanged. Open Chat history and choose New again."),
       ]);
     } finally {
       setIsManagingContext(false);
@@ -633,7 +953,7 @@ function App() {
   }
 
   async function switchChat(chatId: string) {
-    if (!window.blendyApp || isGenerating || isManagingContext || chatId === activeChatId) {
+    if (!window.blendyApp || isGenerating || isManagingContext || notebookSaving || chatId === activeChatId) {
       setChatMenuOpen(false);
       return;
     }
@@ -643,9 +963,17 @@ function App() {
     setConfirmingDeleteChatId("");
     setIsManagingContext(true);
     try {
+      if (!(await persistNotebookDraft())) return;
       const result = await window.blendyApp.switchChat({ chatId, backendSettings });
       setMessages(result.messages);
       setContextSnapshot(result.context);
+      if (result.modelStatus) setModelStatus(result.modelStatus);
+      const nextNotebook = result.projectNotebook || { text: "" };
+      setProjectNotebook(nextNotebook);
+      setNotebookDraft(nextNotebook.text || "");
+      setNotebookSaved(true);
+      setReferenceImages([]);
+      setReferenceError("");
       applyDiagnostics(result.diagnostics);
       setPrompt("");
       requestComposerFocus();
@@ -657,15 +985,9 @@ function App() {
         }
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
       setMessages((current) => [
         ...current,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: message,
-          status: "failed",
-        },
+        operationNotice("Chat did not switch", error, "Your current chat is still open. Open Chat history and select the other chat again."),
       ]);
     } finally {
       setIsManagingContext(false);
@@ -689,13 +1011,17 @@ function App() {
       applyDiagnostics(result.diagnostics);
       setEditingChatId("");
       setEditingChatTitle("");
-    } catch (_error) {
+    } catch (error) {
+      setMessages((current) => [
+        ...current,
+        operationNotice("Chat was not renamed", error, "The old name is unchanged. Open Chat history and try the rename again."),
+      ]);
       setEditingChatId("");
     }
   }
 
   async function deleteChat(chatId: string) {
-    if (!window.blendyApp || isGenerating || isManagingContext) {
+    if (!window.blendyApp || isGenerating || isManagingContext || notebookSaving) {
       return;
     }
     if (confirmingDeleteChatId !== chatId) {
@@ -709,22 +1035,24 @@ function App() {
     setConfirmingDeleteChatId("");
     setIsManagingContext(true);
     try {
+      if (!(await persistNotebookDraft())) return;
       const result = await window.blendyApp.deleteChat({ chatId, backendSettings });
       setMessages(result.messages);
       setContextSnapshot(result.context);
+      if (result.modelStatus) setModelStatus(result.modelStatus);
+      const nextNotebook = result.projectNotebook || { text: "" };
+      setProjectNotebook(nextNotebook);
+      setNotebookDraft(nextNotebook.text || "");
+      setNotebookSaved(true);
+      setReferenceImages([]);
+      setReferenceError("");
       applyDiagnostics(result.diagnostics);
       setPrompt("");
       requestComposerFocus();
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
       setMessages((current) => [
         ...current,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: message,
-          status: "failed",
-        },
+        operationNotice("Chat was not deleted", error, "Nothing was removed. Open Chat history and confirm Delete again."),
       ]);
     } finally {
       setIsManagingContext(false);
@@ -735,23 +1063,33 @@ function App() {
     if (!window.blendyApp) {
       return;
     }
-    const context = await window.blendyApp.refreshContext({ forceScreenshot: true, chatId: activeChatId });
-    setContextSnapshot(context);
-  }
-
-  async function openProjectBrief() {
-    if (!window.blendyApp || !contextSnapshot.projectBriefPath) {
-      return;
+    try {
+      const context = await window.blendyApp.refreshContext({ forceScreenshot: true, chatId: activeChatId });
+      setContextSnapshot(context);
+    } catch (error) {
+      setMessages((current) => [
+        ...current,
+        operationNotice("Screen was not captured", error, "Keep Blender visible, then open the workspace and choose Capture screen again."),
+      ]);
     }
-    await window.blendyApp.openProjectBrief(contextSnapshot.projectBriefPath);
   }
 
   async function openPromptPacket() {
     if (!window.blendyApp || !contextSnapshot.promptPacketPath) {
       return;
     }
-    await window.blendyApp.openDiagnosticFile(contextSnapshot.promptPacketPath);
+    const result = await window.blendyApp.openDiagnosticFile(contextSnapshot.promptPacketPath).catch((error) => ({ ok: false, error: String(error) }));
+    if (!result.ok) {
+      setMessages((current) => [
+        ...current,
+        operationNotice("Diagnostics did not open", result.error, "Nothing changed. Return to Settings and choose Diagnostics again."),
+      ]);
+    }
   }
+
+  const latestAssistant = [...messages]
+    .reverse()
+    .find((message) => message.role === "assistant" && message.status === "done" && message.content.trim());
 
   return (
     <div className="app-window">
@@ -759,9 +1097,9 @@ function App() {
         <div className="brand">
           <img className="brand-logo" src={logoUrl} alt="" />
           <div>
-            <div className="brand-name">Blendy 1.0.5</div>
+            <div className="brand-name">Blendy Studio Coach</div>
             <div className="brand-subtitle">
-              {page === "settings" ? "Settings" : latestDone ? "Done" : isGenerating ? "Reading Blender..." : "Local Blender Tutor"}
+              {page === "settings" ? "Settings" : latestDone ? "Checkpoint ready" : isGenerating ? generationStage?.label || "Preparing answer" : "Local Blender tutor"}
             </div>
           </div>
         </div>
@@ -771,7 +1109,7 @@ function App() {
             {pinned ? <Pin size={16} /> : <PinOff size={16} />}
           </button>
           {page === "chat" && (
-            <button className="icon-button" type="button" onClick={() => setDrawerOpen((open) => !open)} title="Context">
+            <button className="icon-button" type="button" onClick={() => setDrawerOpen((open) => !open)} title="Project workspace" aria-expanded={drawerOpen} aria-controls="project-workspace">
               <PanelRight size={17} />
             </button>
           )}
@@ -799,33 +1137,48 @@ function App() {
           backendSettings={backendSettings}
           updateBackendSettings={updateBackendSettings}
           contextSnapshot={contextSnapshot}
+          modelStatus={modelStatus}
           chatPath={chatPath}
           onOpenPromptPacket={openPromptPacket}
         />
       ) : (
         <main className={`chat-layout ${drawerOpen ? "drawer-open" : ""}`}>
-          <section className="chat-page">
+          <section className="chat-page" aria-hidden={drawerOpen || undefined}>
+            <ReadinessPanel
+              context={contextSnapshot}
+              modelStatus={modelStatus}
+              isGenerating={isGenerating}
+              canStop={Boolean(activeGeneratedMessageIdRef.current)}
+              generationStage={generationStage}
+              onStop={stopGeneration}
+              onRefresh={refreshReadiness}
+            />
+            <SceneMismatchBanner notebook={projectNotebook} onKeep={keepChatForCurrentScene} onNewChat={freshChat} />
             <div className="messages" ref={scrollRef} onScroll={handleScroll}>
-              {messages.map((message, index) => (
-                <MessageRow
-                  key={message.id}
-                  message={message}
-                  isLatestAssistant={message.role === "assistant" && index === messages.length - 1}
-                  onRegenerate={regenerateLatest}
-                  onReceiptClick={(target) => {
-                    if (target.receipt) {
-                      setOpenReceipt({ message: target, receipt: target.receipt });
-                    }
+              {messages.length === 0 ? (
+                <EmptyStudioState
+                  onStarter={(starter) => {
+                    setPrompt(starter);
+                    requestComposerFocus();
                   }}
-                  registerMessageNode={registerMessageNode}
                 />
-              ))}
+              ) : (
+                messages.map((message, index) => (
+                  <MessageRow
+                    key={message.id}
+                    message={message}
+                    isLatestAssistant={message.role === "assistant" && index === messages.length - 1}
+                    onRegenerate={regenerateLatest}
+                    onReceiptClick={(target) => {
+                      if (target.receipt) {
+                        setOpenReceipt({ message: target, receipt: target.receipt });
+                      }
+                    }}
+                    registerMessageNode={registerMessageNode}
+                  />
+                ))
+              )}
             </div>
-            {showJumpLatest && (
-              <button className="jump-latest" type="button" onClick={jumpToLatest}>
-                New text
-              </button>
-            )}
             <div className="floating-controls" ref={contextControlRef}>
               <div className="context-control">
                 <button
@@ -949,26 +1302,53 @@ function App() {
               </div>
             </div>
 
-            <footer className="composer">
-              <textarea
-                ref={promptInputRef}
-                value={prompt}
-                onChange={(event) => setPrompt(event.target.value)}
-                onKeyDown={handlePromptKeyDown}
-                placeholder="Ask Blendy what to do next..."
-                rows={2}
-              />
-              <button className="send-button" type="button" onClick={sendPrompt} disabled={!prompt.trim() || isGenerating}>
-                <Send size={17} />
-              </button>
-            </footer>
+            <div className="coach-dock">
+              {showJumpLatest && (
+                <button className="jump-latest" type="button" onClick={jumpToLatest}>
+                  New text
+                </button>
+              )}
+              {latestAssistant && (
+                <CurrentCheckpoint content={latestAssistant.content} disabled={isGenerating} onFollowUp={sendPrompt} />
+              )}
+              <footer className="composer">
+                <ReferenceAttachmentTray
+                  images={referenceImages}
+                  error={referenceError}
+                  disabled={isGenerating}
+                  supportsVision={modelStatus?.vision !== false}
+                  onChoose={addReferenceFiles}
+                  onRemove={(id) => setReferenceImages((current) => current.filter((image) => image.id !== id))}
+                />
+                <div className="composer-input-row">
+                  <textarea
+                    ref={promptInputRef}
+                    value={prompt}
+                    onChange={(event) => setPrompt(event.target.value)}
+                    onKeyDown={handlePromptKeyDown}
+                    placeholder={contextSnapshot.bridgeOk === false ? "Ask a general Blender question..." : "Describe what you want to make or ask what comes next..."}
+                    rows={2}
+                  />
+                  <button className="send-button" type="button" onClick={() => sendPrompt()} disabled={!prompt.trim() || isGenerating} aria-label="Send message">
+                    <Send size={17} />
+                  </button>
+                </div>
+              </footer>
+            </div>
           </section>
 
           {drawerOpen && (
             <ContextDrawer
               contextSnapshot={contextSnapshot}
               onCaptureViewport={captureViewport}
-              onOpenProjectBrief={openProjectBrief}
+              notebookDraft={notebookDraft}
+              notebookSaved={notebookSaved}
+              notebookSaving={notebookSaving}
+              onNotebookChange={(value) => {
+                setNotebookDraft(value);
+                setNotebookSaved(value.trim() === (projectNotebook.text || "").trim());
+              }}
+              onNotebookSave={saveNotebook}
               onClose={() => setDrawerOpen(false)}
             />
           )}
@@ -993,6 +1373,14 @@ interface MessageRowProps {
   registerMessageNode: (id: string, node: HTMLElement | null) => void;
 }
 
+function retryLabelFor(error: string) {
+  if (/lm studio|load(?:ed)? model|no model/i.test(error)) return "Retry after loading model";
+  if (/blender|bridge|scene/i.test(error)) return "Retry Blender check";
+  if (/timed out|timeout/i.test(error)) return "Retry timed-out step";
+  if (/stopp?ed|cancel/i.test(error)) return "Start again";
+  return "Try again";
+}
+
 function MessageRow({ message, isLatestAssistant, onRegenerate, onReceiptClick, registerMessageNode }: MessageRowProps) {
   if (message.role === "event" && message.marker === "compacted") {
     return (
@@ -1004,12 +1392,30 @@ function MessageRow({ message, isLatestAssistant, onRegenerate, onReceiptClick, 
     );
   }
 
+  if (message.role === "event" && message.status === "failed") {
+    const [title, detail, recovery] = message.content.split("\n");
+    return (
+      <article ref={(node) => registerMessageNode(message.id, node)} className="operation-notice" role="alert">
+        <Info size={17} />
+        <div>
+          <strong>{title || "That action did not finish"}</strong>
+          {detail && <p>{detail}</p>}
+          {recovery && <small>{recovery}</small>}
+        </div>
+      </article>
+    );
+  }
+
   return (
-    <article ref={(node) => registerMessageNode(message.id, node)} className={`message-row ${message.role}`}>
+    <article
+      ref={(node) => registerMessageNode(message.id, node)}
+      className={`message-row ${message.role} ${message.status || ""}`}
+      aria-live={message.status === "streaming" ? "polite" : undefined}
+    >
       <div className="message-label">{message.role === "user" ? "You" : "Blendy"}</div>
       <div className="message-content">
         {message.content ? (
-          message.content.split("\n").map((line) => <p key={line}>{line}</p>)
+          message.content.split("\n").map((line, lineIndex) => <p key={`${message.id}-${lineIndex}`}>{line}</p>)
         ) : (
           <div className="typing-line">
             <Sparkles size={15} />
@@ -1017,20 +1423,23 @@ function MessageRow({ message, isLatestAssistant, onRegenerate, onReceiptClick, 
           </div>
         )}
       </div>
-      {message.context && (
+      {message.role === "assistant" && message.receipt ? (
         <button
-          className={`used-context ${message.role === "assistant" ? "assistant-receipt" : ""}`}
+          className="used-context assistant-receipt"
           type="button"
-          onClick={() => message.role === "assistant" && message.receipt ? onReceiptClick(message) : undefined}
+          onClick={() => onReceiptClick(message)}
         >
-          {message.context}
+          {message.context || "View evidence used for this answer"}
         </button>
-      )}
-      {message.status === "failed" && (
-        <button className="inline-action" type="button" onClick={onRegenerate}>
-          <RefreshCcw size={14} />
-          Retry
-        </button>
+      ) : message.context ? <div className="used-context static-context">{message.context}</div> : null}
+      {(message.status === "failed" || message.status === "cancelled") && (
+        <div className="failure-recovery">
+          <small>{message.status === "cancelled" ? "Generation stopped. Your question is back in the composer." : "Your question is still available to edit. Nothing was lost."}</small>
+          <button className="inline-action" type="button" onClick={onRegenerate}>
+            <RefreshCcw size={14} />
+            {retryLabelFor(message.content)}
+          </button>
+        </div>
       )}
       {isLatestAssistant && message.status === "done" && (
         <button className="inline-action" type="button" onClick={onRegenerate}>
@@ -1083,21 +1492,69 @@ function ReceiptDetails({
   onClose: () => void;
 }) {
   const cards = receipt.cards || [];
+  const trace = receipt.toolTrace || [];
   const usedQueries = receipt.web?.usedQueries || [];
   const attemptedQueries = receipt.web?.queries || [];
   const webQuery = usedQueries[0] || attemptedQueries[0] || "";
+  const closeRef = useRef<HTMLButtonElement | null>(null);
+  const panelRef = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeRef.current?.focus();
+    function handleKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab" || !panelRef.current) return;
+      const focusable = Array.from(panelRef.current.querySelectorAll<HTMLElement>("button, summary, a[href], input, textarea, [tabindex]:not([tabindex='-1'])"));
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      previous?.focus();
+    };
+  }, []);
+
+  const evidence = [
+    receipt.usedScene || trace.some((entry) => entry.sceneUsed || /scene|context/i.test(entry.call?.name || entry.name || "")) ? "Current Blender scene" : "",
+    receipt.usedScreenshot || trace.some((entry) => entry.screenshotUsed || /screen|visual|image/i.test(entry.call?.name || entry.name || "")) ? "Fresh screen capture" : "",
+    trace.length ? `${trace.length} tool check${trace.length === 1 ? "" : "s"}` : "",
+    receipt.safety ? `Safety: ${receipt.safety}` : "",
+  ].filter(Boolean);
   return (
     <div className="receipt-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="receipt-panel" role="dialog" aria-modal="true" aria-label="Blendy receipt" onMouseDown={(event) => event.stopPropagation()}>
+      <section ref={panelRef} className="receipt-panel" role="dialog" aria-modal="true" aria-label="What Blendy checked" onMouseDown={(event) => event.stopPropagation()}>
         <div className="receipt-head">
           <div>
-            <h2>Receipt</h2>
-            <p>{message.context || "What Blendy used"}</p>
+            <h2>What Blendy checked</h2>
+            <p>{receipt.summary || message.context || "Evidence used for this answer"}</p>
           </div>
-          <button type="button" className="icon-button" onClick={onClose} aria-label="Close receipt">
+          <button ref={closeRef} type="button" className="icon-button" onClick={onClose} aria-label="Close receipt">
             <X size={15} />
           </button>
         </div>
+
+        <section className="receipt-evidence" aria-label="Evidence summary">
+          {evidence.length ? evidence.map((item) => <span key={item}><Check size={14} /> {item}</span>) : <p>No live checks were needed for this answer.</p>}
+        </section>
 
         {cards.length > 0 && (
           <section className="receipt-section">
@@ -1125,9 +1582,37 @@ function ReceiptDetails({
           </section>
         )}
 
-        {!cards.length && !receipt.web?.status && !webQuery && (
+        {(receipt.sources || []).length > 0 && (
+          <section className="receipt-section">
+            <h3>Sources</h3>
+            {(receipt.sources || []).map((source, index) => source.url ? (
+              <a className="receipt-source" key={`${source.url}-${index}`} href={source.url} target="_blank" rel="noreferrer">
+                <strong>{source.title || source.host || "Reference"}</strong>
+                <span>{source.url}</span>
+              </a>
+            ) : null)}
+          </section>
+        )}
+
+        {!cards.length && !trace.length && !receipt.web?.status && !webQuery && (
           <p className="receipt-empty">No detailed receipt data was stored for this message.</p>
         )}
+
+        <details className="receipt-diagnostics">
+          <summary>Technical details</summary>
+          <div>
+            {trace.map((entry, index) => (
+              <article className="receipt-trace" key={`${entry.call?.name || entry.name || "tool"}-${index}`}>
+                <strong>{entry.call?.name || entry.name || "Local check"}</strong>
+                <span>{entry.status || (entry.ok === false ? "failed" : "completed")}</span>
+                {(entry.resultPreview || entry.summary) && <p>{entry.resultPreview || entry.summary}</p>}
+                {entry.safety && <small>Safety: {entry.safety}</small>}
+              </article>
+            ))}
+            <DataLine label="Finish reason" value={receipt.finishReason || "complete"} />
+            <DataLine label="Stored context" value={message.context || "None"} />
+          </div>
+        </details>
       </section>
     </div>
   );
@@ -1136,25 +1621,98 @@ function ReceiptDetails({
 function ContextDrawer({
   contextSnapshot,
   onCaptureViewport,
-  onOpenProjectBrief,
+  notebookDraft,
+  notebookSaved,
+  notebookSaving,
+  onNotebookChange,
+  onNotebookSave,
   onClose,
 }: {
   contextSnapshot: ContextSnapshot;
   onCaptureViewport: () => void;
-  onOpenProjectBrief: () => void;
+  notebookDraft: string;
+  notebookSaved: boolean;
+  notebookSaving: boolean;
+  onNotebookChange: (value: string) => void;
+  onNotebookSave: () => void;
   onClose: () => void;
 }) {
+  const [tab, setTab] = useState<"notebook" | "scene">("notebook");
+  const drawerRef = useRef<HTMLElement | null>(null);
+  const closeRef = useRef<HTMLButtonElement | null>(null);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeRef.current?.focus();
+    function handleDrawerKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab" || !drawerRef.current) return;
+      const focusable = Array.from(drawerRef.current.querySelectorAll<HTMLElement>("button, a[href], input, textarea, select, [tabindex]:not([tabindex='-1'])"));
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+    window.addEventListener("keydown", handleDrawerKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleDrawerKeyDown);
+      previous?.focus();
+    };
+  }, []);
+
+  function handleTabKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
+    if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+    event.preventDefault();
+    const next = tab === "notebook" ? "scene" : "notebook";
+    setTab(next);
+    window.requestAnimationFrame(() => {
+      drawerRef.current?.querySelector<HTMLButtonElement>(`[role="tab"][data-tab="${next}"]`)?.focus();
+    });
+  }
   return (
-    <aside className="context-drawer">
+    <aside id="project-workspace" ref={drawerRef} className="context-drawer" role="dialog" aria-modal="true" aria-label="Project workspace">
       <div className="drawer-header">
         <div>
-          <h2>Blender Context</h2>
-          <p>Latest captured project state</p>
+          <h2>Project workspace</h2>
+          <p>Notes and current Blender evidence</p>
         </div>
-        <button className="drawer-close" type="button" onClick={onClose} title="Close context">
+        <button ref={closeRef} className="drawer-close" type="button" onClick={onClose} title="Close project workspace" aria-label="Close project workspace">
           <X size={15} />
         </button>
       </div>
+
+      <div className="drawer-tabs" role="tablist" aria-label="Project workspace sections">
+        <button id="workspace-tab-notebook" data-tab="notebook" type="button" role="tab" aria-selected={tab === "notebook"} aria-controls="workspace-panel-notebook" tabIndex={tab === "notebook" ? 0 : -1} onKeyDown={handleTabKeyDown} onClick={() => setTab("notebook")}>Notebook</button>
+        <button id="workspace-tab-scene" data-tab="scene" type="button" role="tab" aria-selected={tab === "scene"} aria-controls="workspace-panel-scene" tabIndex={tab === "scene" ? 0 : -1} onKeyDown={handleTabKeyDown} onClick={() => setTab("scene")}>Blender scene</button>
+      </div>
+
+      {tab === "notebook" ? (
+        <div id="workspace-panel-notebook" role="tabpanel" aria-labelledby="workspace-tab-notebook">
+          <ProjectNotebookEditor
+            value={notebookDraft}
+            saved={notebookSaved}
+            saving={notebookSaving}
+            onChange={onNotebookChange}
+            onSave={onNotebookSave}
+          />
+        </div>
+      ) : (
+        <div id="workspace-panel-scene" role="tabpanel" aria-labelledby="workspace-tab-scene">
 
       <ContextSection icon={<SlidersHorizontal size={16} />} title="Selected">
         <DataLine label="Object" value={contextSnapshot.selectedObject} />
@@ -1182,10 +1740,8 @@ function ContextDrawer({
         <button className="secondary-button" type="button" onClick={onCaptureViewport}>Capture screen</button>
       </ContextSection>
 
-      <ContextSection icon={<FileText size={16} />} title="Project Brief">
-        <p className="drawer-copy">{contextSnapshot.brief}</p>
-        <button className="secondary-button" type="button" onClick={onOpenProjectBrief}>Open brief</button>
-      </ContextSection>
+        </div>
+      )}
     </aside>
   );
 }
@@ -1217,6 +1773,7 @@ function SettingsPage({
   backendSettings,
   updateBackendSettings,
   contextSnapshot,
+  modelStatus,
   chatPath,
   onOpenPromptPacket,
 }: {
@@ -1225,6 +1782,7 @@ function SettingsPage({
   backendSettings: BackendSettings;
   updateBackendSettings: (partial: Partial<BackendSettings>) => void;
   contextSnapshot: ContextSnapshot;
+  modelStatus?: ModelStatus;
   chatPath: string;
   onOpenPromptPacket: () => void;
 }) {
@@ -1272,48 +1830,98 @@ function SettingsPage({
           onChange={(toolUse) => updateBackendSettings({ toolUse: toolUse as ToolUseMode })}
         />
         <p className="setting-note">Blendy lets the local model request docs, workflow notes, and web lookup tools when needed.</p>
+        <SegmentedControl
+          label="Web access"
+          value={backendSettings.knowledgeMode}
+          options={[
+            ["LOCAL_ONLY", "Local only"],
+            ["ASK_BEFORE_WEB", "Ask me"],
+            ["LOCAL_AUTO_WEB", "Automatic"],
+          ]}
+          onChange={(knowledgeMode) => updateBackendSettings({ knowledgeMode: knowledgeMode as KnowledgeMode })}
+        />
+        <p className="setting-note">
+          {backendSettings.knowledgeMode === "LOCAL_ONLY"
+            ? "Local only keeps search terms and page addresses on this computer."
+            : backendSettings.knowledgeMode === "LOCAL_AUTO_WEB"
+              ? "Automatic may send model-written search terms and HTTPS page addresses to the public web without asking again."
+              : "Ask me is the safe default. Blendy explains why it wants the web before sending a search term or page address."}
+        </p>
+      </SettingsGroup>
+
+      <SettingsGroup title="Instructions">
+        <label className="text-setting instruction-setting">
+          <span>About you</span>
+          <textarea
+            value={backendSettings.userInstructions || ""}
+            maxLength={6000}
+            placeholder="Example: I am a complete Blender beginner. I have made simple beveled product shapes before. Explain one step at a time and assume I may not know where tools live."
+            onChange={(event) => updateBackendSettings({ userInstructions: event.target.value })}
+          />
+        </label>
+        <p className="setting-note">Saved here is included with every prompt as background about your skill level, past projects, and preferred teaching style.</p>
       </SettingsGroup>
 
       <SettingsGroup title="LM Studio">
-        <DataLine label="Provider" value="LM Studio" />
-        <label className="text-setting">
-          <span>Base URL</span>
-          <input
-            value={backendSettings.lmStudioBaseUrl}
-            onChange={(event) => updateBackendSettings({ lmStudioBaseUrl: event.target.value })}
-          />
-        </label>
-        <label className="text-setting">
-          <span>Model</span>
-          <input
-            placeholder="auto"
-            value={backendSettings.model}
-            onChange={(event) => updateBackendSettings({ model: event.target.value || "auto" })}
-          />
-        </label>
-        <label className="text-setting">
-          <span>Response max</span>
-          <input
-            type="number"
-            min="256"
-            max="32000"
-            step="256"
-            value={backendSettings.responseMaxTokens}
-            onChange={(event) => updateBackendSettings({ responseMaxTokens: Number(event.target.value) })}
-          />
-        </label>
-        <label className="range-setting">
-          <span>Context limit</span>
-          <strong>{formatTokens(clampContextLimit(backendSettings.contextLimitTokens))}</strong>
-          <input
-            type="range"
-            min={CONTEXT_LIMIT_MIN_TOKENS}
-            max={CONTEXT_LIMIT_MAX_TOKENS}
-            step={CONTEXT_LIMIT_STEP_TOKENS}
-            value={clampContextLimit(backendSettings.contextLimitTokens)}
-            onChange={(event) => updateBackendSettings({ contextLimitTokens: Number(event.target.value) })}
-          />
-        </label>
+        <div className={`model-summary ${modelStatus?.reachable ? "ready" : "offline"}`}>
+          <div>
+            <strong>{modelStatus?.displayName || modelStatus?.modelId || "Automatic local model"}</strong>
+            <span>{!modelStatus ? "Checking LM Studio" : modelStatus.reachable ? modelStatus.loaded === false ? "Found, but not loaded" : "Ready in LM Studio" : "LM Studio is not running"}</span>
+          </div>
+          <div className="model-capabilities">
+            <span>{modelStatus?.vision === true ? "Vision ready" : modelStatus?.vision === false ? "No vision" : "Vision unknown"}</span>
+            <span>{modelStatus?.toolUse === true ? "Tools ready" : modelStatus?.toolUse === false ? "No tools" : "Tools unknown"}</span>
+            {modelStatus?.contextLength ? <span>{formatTokens(modelStatus.contextLength)} context</span> : null}
+          </div>
+        </div>
+        <p className="setting-note">
+          Automatic selects the loaded chat model and uses its real context size. You normally do not need to edit the controls below.
+        </p>
+        <details className="advanced-settings">
+          <summary>Advanced model controls</summary>
+          <div className="advanced-settings-body">
+            <DataLine label="Provider" value="LM Studio" />
+            <label className="text-setting">
+              <span>Base URL</span>
+              <input
+                value={backendSettings.lmStudioBaseUrl}
+                onChange={(event) => updateBackendSettings({ lmStudioBaseUrl: event.target.value })}
+              />
+            </label>
+            <p className="setting-note">For privacy, Blendy accepts only localhost or 127.0.0.1 LM Studio addresses.</p>
+            <label className="text-setting">
+              <span>Model override</span>
+              <input
+                placeholder="auto"
+                value={backendSettings.model}
+                onChange={(event) => updateBackendSettings({ model: event.target.value || "auto" })}
+              />
+            </label>
+            <label className="text-setting">
+              <span>Response max</span>
+              <input
+                type="number"
+                min="256"
+                max="6000"
+                step="256"
+                value={backendSettings.responseMaxTokens}
+                onChange={(event) => updateBackendSettings({ responseMaxTokens: Number(event.target.value) })}
+              />
+            </label>
+            <label className="range-setting">
+              <span>Context limit</span>
+              <strong>{formatTokens(clampContextLimit(backendSettings.contextLimitTokens))}</strong>
+              <input
+                type="range"
+                min={CONTEXT_LIMIT_MIN_TOKENS}
+                max={CONTEXT_LIMIT_MAX_TOKENS}
+                step={CONTEXT_LIMIT_STEP_TOKENS}
+                value={clampContextLimit(backendSettings.contextLimitTokens)}
+                onChange={(event) => updateBackendSettings({ contextLimitTokens: Number(event.target.value) })}
+              />
+            </label>
+          </div>
+        </details>
       </SettingsGroup>
 
       <SettingsGroup title="Diagnostics">
@@ -1348,7 +1956,6 @@ function SettingsPage({
         <DataLine label="Selected cards" value={(contextSnapshot.selectedCards || []).join(" | ") || "None yet"} />
         <DataLine label="Source URLs" value={(contextSnapshot.knowledgeSourceUrls || []).join(" | ") || "None yet"} />
         <DataLine label="Current .blend" value={contextSnapshot.project} />
-        <DataLine label="Project Brief" value={contextSnapshot.projectBriefPath} />
         <DataLine label="App data" value={contextSnapshot.appDataPath} />
         <DataLine label="Discovery file" value={contextSnapshot.bridgeDiscoveryPath || "Auto"} />
         <DataLine label="Chat file" value={chatPath || "Not created yet"} />
@@ -1390,12 +1997,14 @@ function SegmentedControl({
   return (
     <div className="segmented-row">
       <span>{label}</span>
-      <div className="segmented-control">
+      <div className="segmented-control" role="radiogroup" aria-label={label}>
         {options.map(([optionValue, optionLabel]) => (
           <button
             key={optionValue}
             className={value === optionValue ? "active" : ""}
             type="button"
+            role="radio"
+            aria-checked={value === optionValue}
             onClick={() => onChange(optionValue)}
           >
             {optionLabel}

@@ -4,6 +4,16 @@ const path = require("path");
 
 const repoRoot = path.resolve(__dirname, "..");
 const appSource = fs.readFileSync(path.join(repoRoot, "blendy", "src", "App.tsx"), "utf8");
+const mainSource = fs.readFileSync(path.join(repoRoot, "blendy", "electron", "main.cjs"), "utf8");
+const preloadSource = fs.readFileSync(path.join(repoRoot, "blendy", "electron", "preload.cjs"), "utf8");
+
+assert(mainSource.includes("sandbox: true"), "Electron renderer must run in Chromium's sandbox.");
+assert(mainSource.includes("setWindowOpenHandler"), "New windows must be intercepted instead of inheriting app privileges.");
+assert(mainSource.includes('parsed.protocol === "https:"'), "Only validated HTTPS source links may open externally.");
+assert(mainSource.includes('on("will-navigate"'), "Unexpected top-level renderer navigation must be blocked.");
+assert(preloadSource.includes("getModelStatus"), "Preload should expose local-model readiness checks.");
+assert(preloadSource.includes("cancelMessage"), "Preload should expose generation cancellation.");
+assert(preloadSource.includes("saveChatNotebook"), "Preload should expose per-chat project notebook persistence.");
 
 assert(
   !appSource.includes('key={activeChatId || "no-active-chat"}'),
@@ -17,8 +27,28 @@ assert(
 );
 assert(appSource.includes("confirmingDeleteChatId"), "Delete chat should use explicit in-app confirmation state.");
 assert(appSource.includes('label="Tool use"'), "Settings should expose Tool Use instead of old Auto Web routing.");
+assert(appSource.includes('title="Instructions"'), "Settings should include a user instructions panel.");
+assert(appSource.includes("userInstructions"), "Settings should persist user instructions through backend settings.");
 assert(appSource.includes("toolDefinitionTokens"), "Context UI should show tool definition/reserve accounting.");
 assert(appSource.includes("imageReserveTokens"), "Context UI should show screenshot reserve accounting.");
+assert(appSource.includes("<ReadinessPanel"), "Chat should show Blender and model readiness before generation.");
+assert(appSource.includes("cancelMessage"), "Generation should provide a cancellable Stop flow.");
+assert(appSource.includes("<CurrentCheckpoint"), "Completed answers should expose checkpoint recovery actions.");
+assert(appSource.includes("saveChatNotebook"), "Project notebook changes should be saved per chat.");
+assert(appSource.includes("referenceImages"), "Composer should send attached reference images to the local model.");
+assert(appSource.includes('label="Web access"'), "Settings should separate web policy from tool use.");
+assert(appSource.includes('"ASK_BEFORE_WEB"'), "Ask before web should be offered as the safe web policy.");
+assert(appSource.includes("modelStatus"), "Settings and chat should surface loaded model capabilities.");
+for (const [operation, nextOperation] of [
+  ["compactNow", "freshChat"],
+  ["freshChat", "switchChat"],
+  ["switchChat", "beginRenameChat"],
+  ["deleteChat", "captureViewport"],
+]) {
+  const operationMatch = appSource.match(new RegExp(`async function ${operation}[\\s\\S]*?(?:async )?function ${nextOperation}`));
+  assert(operationMatch, `${operation} should be present.`);
+  assert(operationMatch[0].includes("operationNotice("), `${operation} failures should render an operation notice.`);
+}
 assert(
   !appSource.includes("Auto Web can fetch docs"),
   "Settings copy should not describe old pre-answer Auto Web fetching.",

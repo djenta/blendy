@@ -6,30 +6,39 @@ context, and does not execute model-written Blender Python.
 
 ## Download
 
-[![Download Blendy 1.0.6 for Windows](https://img.shields.io/badge/Download-Blendy%201.0.6%20for%20Windows-2ea44f?style=for-the-badge&logo=windows)](https://github.com/djenta/blendy/releases/latest)
+[![Download Blendy 2.0.0 for Windows](https://img.shields.io/badge/Download-Blendy%202.0.0%20for%20Windows-2ea44f?style=for-the-badge&logo=windows)](https://github.com/djenta/blendy/releases/latest)
 
 <p>
-  <a href="docs/screenshots/blendy-promo-1.png"><img src="docs/screenshots/blendy-promo-1.png" alt="Blendy reading a Blender scene and answering in the desktop tutor app" width="100%"></a>
+  <a href="docs/screenshots/blendy-promo-1.png"><img src="docs/screenshots/blendy-promo-1.png" alt="Blendy 2 project starting screen with readiness status and guided Blender prompts" width="100%"></a>
 </p>
 <p>
-  <a href="docs/screenshots/blendy-promo-2.png"><img src="docs/screenshots/blendy-promo-2.png" alt="Blendy suggesting a faster curve workflow for a cable model in Blender" width="100%"></a>
+  <a href="docs/screenshots/blendy-promo-2.png"><img src="docs/screenshots/blendy-promo-2.png" alt="Blendy 2 project notebook for goals, style, constraints, and chat-specific decisions" width="100%"></a>
 </p>
 <p>
-  <a href="docs/screenshots/blendy-promo-3.png"><img src="docs/screenshots/blendy-promo-3.png" alt="Blendy receipt showing the troubleshooting and workflow shortcuts used" width="100%"></a>
+  <a href="docs/screenshots/blendy-promo-3.png"><img src="docs/screenshots/blendy-promo-3.png" alt="Blendy 2 detecting a local Gemma 4 model with vision, tools, and context capacity" width="100%"></a>
 </p>
 
 Download the Windows installer from the latest GitHub Release:
 
 ```text
-Blendy.Local.AI.Tutor.Setup.1.0.6.exe
+Blendy Local AI Tutor Setup 2.0.0.exe
 ```
+
+The 2.0 installer is not code-signed, so Windows SmartScreen may show an
+unknown-publisher warning. The release includes `SHA256SUMS.txt` so you can
+verify that the installer matches the file built by GitHub Actions.
 
 ## What You Need
 
 - Windows
 - Blender 4.x or newer
 - LM Studio with the local server turned on
-- Any LM Studio model you want to use
+- A chat model loaded in LM Studio
+
+Gemma 4 is the recommended model family for the full experience because it can
+understand screenshots, reason about visual references, and use Blendy's local
+reference tools. Blendy checks the loaded model and falls back to the features
+that model can actually use.
 
 Default LM Studio server URL:
 
@@ -39,14 +48,14 @@ http://localhost:1234/v1
 
 ## Install On Windows
 
-1. Download `Blendy.Local.AI.Tutor.Setup.1.0.6.exe`.
+1. Download `Blendy Local AI Tutor Setup 2.0.0.exe`.
 2. Run the installer.
 3. Open Blender.
 4. In the 3D View, press `N` to open the right sidebar.
 5. Click the `Local AI` tab.
 6. Click `Launch Blendy`.
 7. In LM Studio, load a model and start the local server.
-8. In the Blendy desktop app, send a question.
+8. In Blendy, wait for the three readiness checks and send a question.
 
 The installer also creates a desktop shortcut and Start Menu shortcut for
 Blendy. It installs to the normal per-user Windows app location so Blender can
@@ -94,12 +103,18 @@ Installer add-on logs are written to:
 
 ## Using Blendy
 
-- Ask normal beginner Blender questions.
-- Save your `.blend` file if you want project memory.
-- Blendy reads `truth.md` beside your saved `.blend` file when that file exists.
-- Use a vision-capable LM Studio model if you want screenshot-aware answers.
-- Use `auto` for the model setting if you want Blendy to use whatever model is
-  currently loaded in LM Studio.
+- Start by describing what you are making and what kind of help you want.
+- Follow the current checkpoint, then use `Check my work` so Blendy inspects a
+  fresh scene and tells you whether the expected change is visible.
+- Use `I'm stuck` for a smaller recovery step or `Show me where` for the exact
+  Blender area and control.
+- Attach up to two reference images when the visual target matters.
+- Keep goals, decisions, and recurring constraints in the Project Notebook.
+  The notebook belongs to the chat and does not lock that chat to one `.blend`.
+- If Blender changes to a different saved scene, Blendy warns you before old
+  project context can be mixed in. You can keep the chat or start a fresh one.
+- Choose `Local only`, `Ask me`, or `Automatic` for external web access. Local
+  Blender references remain available when the web is off.
 
 ## Troubleshooting
 
@@ -117,10 +132,20 @@ If Blendy cannot reach the model:
 3. Start the local server.
 4. Confirm the server URL is `http://localhost:1234/v1`.
 
+Blendy's readiness card reports the selected model, whether it can inspect
+images and use tools, and the context size of the loaded instance. Advanced
+model controls remain available in Settings, but normal use should not require
+editing a model ID or token count by hand.
+
 ## Privacy
 
 Blendy is designed for local use. Your model runs through LM Studio on your
 computer.
+
+External web access is off in `Local only`, requires approval in `Ask me`, and
+may send a model-written search query in `Automatic`. Web pages are treated as
+untrusted evidence and are read through size, timeout, redirect, content-type,
+and private-network limits.
 
 Stored locally on your computer:
 
@@ -129,7 +154,8 @@ Stored locally on your computer:
 - diagnostics
 - prompt packets sent to LM Studio
 - Blender scene facts
-- local `.blend` and `truth.md` paths
+- the current `.blend` path when Blender reports one, used only for the optional
+  scene-mismatch warning
 - bridge discovery data
 
 ## Developer Build
@@ -138,6 +164,11 @@ From the `blendy` folder:
 
 ```powershell
 npm install
+npm test
 npm run build
 npm run dist
 ```
+
+GitHub Actions runs the same checks on every pull request and main-branch push.
+Pushing a version tag builds and publishes the Windows installer and manual
+Blender add-on package.

@@ -1,13 +1,20 @@
-"""Local AI Blender Tutor add-on."""
+"""Blendy Blender add-on: secure read-only scene evidence bridge.
+
+Legacy in-Blender chat code is retained only for migration-readable source history.
+It is not registered; the Electron companion is the single prompt/model runtime.
+"""
 
 from __future__ import annotations
 
 import os
 import queue
 import json
+import hashlib
+import secrets
 import subprocess
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -19,10 +26,10 @@ from . import core
 bl_info = {
     "name": "Local AI Chat",
     "author": "Blendy contributors",
-    "version": (1, 0, 3),
+    "version": (2, 0, 0),
     "blender": (4, 0, 0),
     "location": "View3D > Sidebar > Local AI",
-    "description": "Project-aware local AI tutor for Blender using LM Studio.",
+    "description": "Secure live-scene bridge for the Blendy desktop tutor.",
     "category": "3D View",
 }
 
@@ -37,7 +44,7 @@ except ModuleNotFoundError:  # Allows importing helper modules during normal Pyt
 
 
 _RESULT_QUEUE: "queue.Queue[dict[str, Any]]" = queue.Queue()
-_BRIDGE_JOB_QUEUE: "queue.Queue[dict[str, Any]]" = queue.Queue()
+_BRIDGE_JOB_QUEUE: "queue.Queue[dict[str, Any]]" = queue.Queue(maxsize=2)
 _TIMER_ACTIVE = False
 _BRIDGE_SERVER: ThreadingHTTPServer | None = None
 _BRIDGE_THREAD: threading.Thread | None = None
@@ -46,12 +53,193 @@ BLENDY_BRIDGE_HOST = "127.0.0.1"
 BLENDY_BRIDGE_DEFAULT_PORT = 8765
 BLENDY_BRIDGE_PORT_SCAN_COUNT = 25
 _BRIDGE_PORT: int | None = None
+_BRIDGE_TOKEN = ""
+BLENDY_BRIDGE_PROTOCOL_VERSION = 2
+BLENDY_BRIDGE_TOKEN_HEADER = "X-Blendy-Token"
+BLENDY_BRIDGE_MAX_REQUEST_BYTES = 64 * 1024
+BLENDY_BRIDGE_MAX_PROMPT_CHARS = 8_000
+BLENDY_BRIDGE_MAX_IMAGE_BYTES = 10 * 1024 * 1024
+BLENDY_BRIDGE_MAX_JOBS_PER_TICK = 1
+BLENDY_BRIDGE_ALLOWED_ORIGINS: frozenset[str] = frozenset()
+BLENDY_CONTEXT_TIERS = frozenset({"compact", "focused", "expanded"})
+BLENDY_CONTEXT_CHAR_CAPS = {
+    "compact": 12_000,
+    "focused": 30_000,
+    "expanded": 60_000,
+}
 CHAT_TEXT_NAME = "Blender Tutor Chat"
 CHAT_VIEWPORT_MIN_ROWS = 4
 CHAT_VIEWPORT_MAX_ROWS = 10
 CHAT_ROW_PIXEL_ESTIMATE = 24
 CHAT_RESERVED_PIXEL_ESTIMATE = 285
 CHAT_PAGE_STEP = 7
+
+
+class _BridgeBusyError(RuntimeError):
+    """Raised when Blender already has the maximum safe context work queued."""
+
+
+def _header_value(headers: Any, name: str) -> str:
+    """Read a request header from email.message or a plain test mapping."""
+
+    getter = getattr(headers, "get", None)
+    if callable(getter):
+        value = getter(name)
+        if value is not None:
+            return str(value).strip()
+    try:
+        for key, value in headers.items():
+            if str(key).lower() == name.lower():
+                return str(value).strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _bridge_request_token(headers: Any) -> str:
+    token = _header_value(headers, BLENDY_BRIDGE_TOKEN_HEADER)
+    if token:
+        return token
+    authorization = _header_value(headers, "Authorization")
+    scheme, separator, value = authorization.partition(" ")
+    if separator and scheme.lower() == "bearer":
+        return value.strip()
+    return ""
+
+
+def _bridge_token_matches(headers: Any, expected_token: str | None = None) -> bool:
+    expected = expected_token if expected_token is not None else _BRIDGE_TOKEN
+    supplied = _bridge_request_token(headers)
+    if not expected or not supplied:
+        return False
+    return secrets.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8"))
+
+
+def _bridge_origin_allowed(headers: Any) -> bool:
+    """Only native main-process requests, which have no browser Origin, are valid."""
+
+    return not _header_value(headers, "Origin")
+
+
+def _bounded_visual_evidence(
+    evidence: list[dict[str, str]],
+    max_bytes: int = BLENDY_BRIDGE_MAX_IMAGE_BYTES,
+) -> tuple[list[dict[str, str]], int]:
+    """Prefer the overview and drop later images until encoded payload fits."""
+
+    kept = list(evidence)
+    omitted = 0
+    while kept and sum(len(str(item.get("dataUrl", "")).encode("utf-8")) for item in kept) > max_bytes:
+        kept.pop()
+        omitted += 1
+    return kept, omitted
+
+
+def _validated_bridge_content_length(raw_length: str) -> int:
+    try:
+        length = int(raw_length or "0")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Content-Length is invalid.") from exc
+    if length < 0:
+        raise ValueError("Content-Length is invalid.")
+    if length > BLENDY_BRIDGE_MAX_REQUEST_BYTES:
+        raise OverflowError("Request body is too large.")
+    return length
+
+
+def _bridge_context_selection(prompt: str, requested_tier: str = "") -> dict[str, Any]:
+    """Choose deterministic Blender evidence without sending the whole scene every turn."""
+
+    lower = (prompt or "").lower()
+    requested = (requested_tier or "").strip().lower()
+    requested = {
+        "minimal": "compact",
+        "standard": "focused",
+        "full": "expanded",
+        "auto": "",
+    }.get(requested, requested)
+
+    node_terms = (
+        "node", "shader", "compositor", "geometry nodes", "socket", "principled",
+        "material graph", "node tree", "link",
+    )
+    material_terms = (
+        "material", "texture", "roughness", "metallic", "alpha", "normal map",
+        "image texture", "uv",
+    )
+    keymap_terms = (
+        "shortcut", "hotkey", "keymap", "keyboard", "press ", "key binding",
+    )
+    scene_terms = (
+        "outliner", "all objects", "whole scene", "entire scene", "object list",
+        "collection", "what objects",
+    )
+    expanded_terms = (
+        "full context", "expanded context", "everything in the scene", "exact node links",
+        "debug the whole", "inspect everything",
+    )
+
+    sections = {
+        "nodes": any(term in lower for term in node_terms),
+        "materials": any(term in lower for term in material_terms),
+        "keymap": any(term in lower for term in keymap_terms),
+        "sceneObjects": any(term in lower for term in scene_terms),
+    }
+    if requested in BLENDY_CONTEXT_TIERS:
+        tier = requested
+        reason = "requested"
+    elif any(term in lower for term in expanded_terms):
+        tier = "expanded"
+        reason = "prompt requested broad inspection"
+    elif any(sections.values()):
+        tier = "focused"
+        reason = "prompt requested specific Blender evidence"
+    else:
+        tier = "compact"
+        reason = "compact live facts are sufficient"
+
+    if tier == "expanded":
+        sections = {key: True for key in sections}
+    return {
+        "tier": tier,
+        "reason": reason,
+        "sections": sections,
+    }
+
+
+def _sanitize_bridge_request_payload(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("Request JSON must be an object.")
+    prompt = payload.get("prompt", "")
+    if not isinstance(prompt, str):
+        raise ValueError("prompt must be text.")
+    if len(prompt) > BLENDY_BRIDGE_MAX_PROMPT_CHARS:
+        raise ValueError(f"prompt exceeds {BLENDY_BRIDGE_MAX_PROMPT_CHARS} characters.")
+    screenshot = str(payload.get("screenshot", "never")).strip().lower()
+    if screenshot not in {"never", "auto", "always"}:
+        raise ValueError("screenshot must be never, auto, or always.")
+    requested_tier = payload.get("contextTier", payload.get("contextLevel", ""))
+    if requested_tier is not None and not isinstance(requested_tier, str):
+        raise ValueError("contextTier must be text.")
+    requested_tier_text = str(requested_tier or "").strip().lower()
+    if requested_tier_text not in {
+        "",
+        "auto",
+        "compact",
+        "focused",
+        "expanded",
+        "minimal",
+        "standard",
+        "full",
+    }:
+        raise ValueError("contextTier must be compact, focused, expanded, or auto.")
+    selection = _bridge_context_selection(prompt, requested_tier_text)
+    return {
+        "prompt": prompt,
+        "screenshot": screenshot,
+        "contextTier": selection["tier"],
+        "contextSelection": selection,
+    }
 
 
 def _process_bridge_jobs() -> None:
@@ -683,7 +871,12 @@ if bpy is not None:
         return lines
 
 
-    def _node_tree_summary(title: str, node_tree: Any, node_limit: int = 24) -> list[str]:
+    def _node_tree_summary(
+        title: str,
+        node_tree: Any,
+        node_limit: int = 24,
+        link_limit: int = 24,
+    ) -> list[str]:
         if not node_tree:
             return []
         try:
@@ -702,7 +895,7 @@ if bpy is not None:
             lines.append(_node_summary_line(node))
         if len(nodes) > node_limit:
             lines.append(f"... {len(nodes) - node_limit} more nodes not listed")
-        links = _node_link_summary(node_tree)
+        links = _node_link_summary(node_tree, limit=link_limit)
         if links:
             lines.append("Links:")
             lines.extend(links)
@@ -752,7 +945,12 @@ if bpy is not None:
         return lines
 
 
-    def _node_context_summary(context: Any) -> list[str]:
+    def _node_context_summary(
+        context: Any,
+        node_limit: int = 24,
+        link_limit: int = 24,
+        material_limit: int = 6,
+    ) -> list[str]:
         lines = ["Node/editor context:"]
         visible = _visible_editor_context(context)
         if visible:
@@ -770,7 +968,12 @@ if bpy is not None:
             if key in seen:
                 return
             seen.add(key)
-            summary = _node_tree_summary(title, node_tree)
+            summary = _node_tree_summary(
+                title,
+                node_tree,
+                node_limit=node_limit,
+                link_limit=link_limit,
+            )
             if summary:
                 summaries.append(summary)
 
@@ -802,7 +1005,7 @@ if bpy is not None:
                 material_slots = list(getattr(active, "material_slots", []))
             except Exception:
                 material_slots = []
-            for slot in material_slots[:6]:
+            for slot in material_slots[:material_limit]:
                 material = getattr(slot, "material", None)
                 if material and getattr(material, "use_nodes", False):
                     add_tree(f"Material node tree {material.name}", getattr(material, "node_tree", None))
@@ -813,6 +1016,38 @@ if bpy is not None:
         for summary in summaries:
             lines.append("")
             lines.extend(summary)
+        return lines
+
+
+    def _material_node_context(
+        context: Any,
+        node_limit: int = 10,
+        link_limit: int = 10,
+        material_limit: int = 3,
+    ) -> list[str]:
+        active = context.active_object
+        lines = ["Active material evidence:"]
+        if active is None:
+            return lines + ["- No active object."]
+        slots = list(getattr(active, "material_slots", []))[:material_limit]
+        found = False
+        for slot in slots:
+            material = getattr(slot, "material", None)
+            if not material:
+                continue
+            found = True
+            lines.append(f"- Material: {material.name}; use_nodes={bool(getattr(material, 'use_nodes', False))}")
+            if getattr(material, "use_nodes", False):
+                lines.extend(
+                    _node_tree_summary(
+                        f"Material node tree {material.name}",
+                        getattr(material, "node_tree", None),
+                        node_limit=node_limit,
+                        link_limit=link_limit,
+                    )
+                )
+        if not found:
+            lines.append("- Active object has no assigned material.")
         return lines
 
 
@@ -838,7 +1073,8 @@ if bpy is not None:
 
 
     def _snapshot_object(obj: Any) -> dict[str, Any]:
-        material_names = [slot.material.name for slot in obj.material_slots if slot.material]
+        all_material_names = [slot.material.name for slot in obj.material_slots if slot.material]
+        modifiers = list(obj.modifiers)
         data: dict[str, Any] = {
             "type": obj.type,
             "visible": bool(obj.visible_get()),
@@ -846,16 +1082,20 @@ if bpy is not None:
             "rotation": list(_safe_float_tuple(obj.rotation_euler)),
             "scale": list(_safe_float_tuple(obj.scale)),
             "dimensions": list(_safe_float_tuple(obj.dimensions)),
-            "materials": material_names,
+            "materials": all_material_names[:16],
             "modifiers": [
                 {
                     "name": modifier.name,
                     "type": modifier.type,
                     "show_viewport": bool(modifier.show_viewport),
                 }
-                for modifier in obj.modifiers
+                for modifier in modifiers[:24]
             ],
         }
+        if len(all_material_names) > 16:
+            data["materials_truncated_after"] = 16
+        if len(modifiers) > 24:
+            data["modifiers_truncated_after"] = 24
         mesh_counts = _mesh_count_dict(obj)
         if mesh_counts:
             data["mesh"] = mesh_counts
@@ -1044,6 +1284,169 @@ if bpy is not None:
         return "\n".join(lines)
 
 
+    def _bridge_cap_text(text: str, tier: str, section: str) -> str:
+        limit = BLENDY_CONTEXT_CHAR_CAPS.get(tier, BLENDY_CONTEXT_CHAR_CAPS["compact"])
+        if len(text) <= limit:
+            return text
+        marker = f"\n... [{section} deterministically capped at {limit:,} characters]"
+        return text[: max(0, limit - len(marker))].rstrip() + marker
+
+
+    def _build_bridge_runtime_facts(context: Any, selection: dict[str, Any]) -> str:
+        active = context.active_object
+        lines = [
+            "Live Blender runtime facts (read-only):",
+            f"Blender version: {bpy.app.version_string}",
+            f"Blender Python API version: {'.'.join(str(part) for part in bpy.app.version)}",
+            f"Current mode: {context.mode}",
+            f"Workspace: {context.workspace.name if context.workspace else 'unknown'}",
+            f"Scene: {context.scene.name}",
+            _active_tool_summary(context),
+            f"Active object type: {active.type if active else 'none'}",
+        ]
+        if selection["sections"].get("keymap"):
+            keymap_limit = 18 if selection["tier"] == "expanded" else 10
+            lines.extend(_active_keymap_summary(context, limit=keymap_limit))
+        else:
+            lines.append("Keymap detail omitted because this prompt did not ask about shortcuts.")
+        return _bridge_cap_text("\n".join(lines), selection["tier"], "runtime facts")
+
+
+    def _build_bridge_scene_context(context: Any, selection: dict[str, Any]) -> str:
+        tier = selection["tier"]
+        sections = selection["sections"]
+        scene = context.scene
+        objects = sorted(list(scene.objects), key=lambda item: item.name.casefold())
+        counts: dict[str, int] = {}
+        for obj in objects:
+            counts[obj.type] = counts.get(obj.type, 0) + 1
+        selected_names = sorted(obj.name for obj in context.selected_objects)
+        lines = [
+            "Compact live scene facts:",
+            f"Scene: {scene.name}",
+            f"Frame: {scene.frame_current}",
+            "Object counts: "
+            + (", ".join(f"{key}={value}" for key, value in sorted(counts.items())) or "none"),
+            "Selected objects: " + (", ".join(selected_names[:12]) or "none"),
+        ]
+        if len(selected_names) > 12:
+            lines.append(f"... {len(selected_names) - 12} more selected object names omitted")
+
+        active = context.active_object
+        if active is None:
+            lines.append("Active object: none")
+        else:
+            lines.extend(
+                [
+                    "",
+                    f"Active object: {active.name}",
+                    f"Type: {active.type}",
+                    f"Mode: {active.mode}",
+                    f"Location: {_safe_float_tuple(active.location)}",
+                    f"Rotation Euler: {_safe_float_tuple(active.rotation_euler)}",
+                    f"Scale: {_safe_float_tuple(active.scale)}",
+                    f"Dimensions: {_safe_float_tuple(active.dimensions)}",
+                ]
+            )
+            if active.type == "MESH" and active.data:
+                mesh = active.data
+                lines.extend(
+                    [
+                        f"Mesh vertices: {len(mesh.vertices)}",
+                        f"Mesh edges: {len(mesh.edges)}",
+                        f"Mesh faces: {len(mesh.polygons)}",
+                        _selected_mesh_counts(active),
+                    ]
+                )
+                if tier in {"focused", "expanded"}:
+                    lines.append(_evaluated_mesh_counts(active, context))
+            lines.extend(_material_summary(active)[:10])
+            modifiers = list(getattr(active, "modifiers", []))
+            lines.append("Modifier stack:")
+            if modifiers:
+                lines.extend(_modifier_summary(modifier) for modifier in modifiers[:12])
+                if len(modifiers) > 12:
+                    lines.append(f"... {len(modifiers) - 12} more modifiers omitted")
+            else:
+                lines.append("- none")
+            if tier == "expanded":
+                lines.append(f"World bounding box corners: {_world_bounding_box(active)}")
+
+        visible = _visible_editor_context(context)
+        if visible:
+            lines.extend(["", "Visible Blender editors:", *visible[:16]])
+
+        if sections.get("nodes"):
+            node_limit = 24 if tier == "expanded" else 10
+            link_limit = 24 if tier == "expanded" else 10
+            lines.extend(["", *_node_context_summary(context, node_limit=node_limit, link_limit=link_limit)])
+        elif sections.get("materials"):
+            node_limit = 16 if tier == "expanded" else 8
+            lines.extend(
+                [
+                    "",
+                    *_material_node_context(
+                        context,
+                        node_limit=node_limit,
+                        link_limit=node_limit,
+                        material_limit=6 if tier == "expanded" else 3,
+                    ),
+                ]
+            )
+        else:
+            lines.append("Node/material graph detail omitted because this prompt did not ask for it.")
+
+        if sections.get("sceneObjects"):
+            object_limit = 100 if tier == "expanded" else 40
+            lines.extend(["", f"Scene object list (first {object_limit}):"])
+            selected = set(context.selected_objects)
+            lines.extend(_object_summary(obj, selected=obj in selected) for obj in objects[:object_limit])
+            if len(objects) > object_limit:
+                lines.append(f"... {len(objects) - object_limit} more objects omitted")
+        else:
+            lines.append("Full object list omitted; compact object counts are above.")
+        return _bridge_cap_text("\n".join(lines), tier, "scene facts")
+
+
+    def _bridge_project_payload(context: Any) -> dict[str, Any]:
+        raw_path = str(getattr(bpy.data, "filepath", "") or "")
+        if raw_path:
+            resolved = str(Path(raw_path).expanduser().resolve(strict=False))
+            normalized = os.path.normcase(os.path.normpath(resolved))
+            identity = "blend:" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:20]
+            return {
+                "name": Path(resolved).name,
+                "path": resolved,
+                "identity": identity,
+                "saved": True,
+            }
+        scene_name = str(getattr(context.scene, "name", "Scene") or "Scene")
+        return {
+            "name": "Unsaved Blender Project",
+            "path": "",
+            "identity": f"unsaved:{os.getpid()}:{scene_name}",
+            "saved": False,
+        }
+
+
+    def _build_bridge_context_text(
+        runtime_facts: str,
+        scene_context: str,
+        scene_diff: str,
+        visual_context: str,
+        tier: str,
+    ) -> str:
+        text = "\n\n".join(
+            [
+                "[LIVE BLENDER RUNTIME]\n" + runtime_facts,
+                "[LIVE BLENDER SCENE]\n" + scene_context,
+                "[CHANGES SINCE PREVIOUS CAPTURE]\n" + scene_diff,
+                "[VISUAL EVIDENCE]\n" + visual_context,
+            ]
+        )
+        return _bridge_cap_text(text, tier, "combined context")
+
+
     def _context_parts_for_prompt(
         context: Any,
         props: Any,
@@ -1207,11 +1610,12 @@ if bpy is not None:
                 bpy.data.images.remove(image)
 
 
-    def _capture_screenshot_data_url(max_px: int = 800) -> str:
+    def _capture_screenshot_data_url(max_px: int = 800, with_kind: bool = False) -> Any:
         handle, path = tempfile.mkstemp(prefix="local_ai_chat_", suffix=".png")
         os.close(handle)
         try:
             captured = False
+            capture_kind = "overview"
             for window in bpy.context.window_manager.windows:
                 screen = window.screen
                 try:
@@ -1234,6 +1638,7 @@ if bpy is not None:
                             with bpy.context.temp_override(window=window, screen=screen, area=area):
                                 bpy.ops.screen.screenshot_area(filepath=path)
                             captured = True
+                            capture_kind = "active_editor"
                             break
                         except Exception:
                             continue
@@ -1245,7 +1650,61 @@ if bpy is not None:
                 except TypeError:
                     bpy.ops.screen.screenshot(filepath=path)
             _scale_png_in_place(path, max_px)
-            return core.encode_image_data_url(path)
+            data_url = core.encode_image_data_url(path)
+            return (data_url, capture_kind) if with_kind else data_url
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
+    def _capture_active_area_data_url(
+        max_px: int,
+        selection: dict[str, Any],
+    ) -> tuple[str, str]:
+        """Capture a useful editor crop when Blender exposes one; never pretend on failure."""
+
+        if selection["sections"].get("nodes"):
+            preferred = ["NODE_EDITOR", "VIEW_3D", "PROPERTIES"]
+        elif selection["sections"].get("materials"):
+            preferred = ["NODE_EDITOR", "PROPERTIES", "VIEW_3D", "IMAGE_EDITOR"]
+        else:
+            preferred = ["VIEW_3D", "NODE_EDITOR", "PROPERTIES"]
+        candidates: list[tuple[int, int, Any, Any, Any]] = []
+        for window in bpy.context.window_manager.windows:
+            screen = window.screen
+            for area in getattr(screen, "areas", []):
+                area_type = getattr(area, "type", "")
+                if area_type not in preferred:
+                    continue
+                region = next(
+                    (region for region in getattr(area, "regions", []) if getattr(region, "type", "") == "WINDOW"),
+                    None,
+                )
+                if region is None:
+                    continue
+                rank = preferred.index(area_type)
+                size = int(getattr(area, "width", 0) or 0) * int(getattr(area, "height", 0) or 0)
+                candidates.append((rank, -size, window, area, region))
+        if not candidates:
+            raise RuntimeError("No visible 3D View or Node Editor area is available for a focused capture.")
+
+        _rank, _size, window, area, region = sorted(candidates, key=lambda item: (item[0], item[1]))[0]
+        handle, path = tempfile.mkstemp(prefix="local_ai_chat_area_", suffix=".png")
+        os.close(handle)
+        try:
+            with bpy.context.temp_override(
+                window=window,
+                screen=window.screen,
+                area=area,
+                region=region,
+            ):
+                bpy.ops.screen.screenshot_area(filepath=path)
+            if not os.path.exists(path) or os.path.getsize(path) <= 0:
+                raise RuntimeError("Blender returned an empty focused screenshot.")
+            _scale_png_in_place(path, max_px)
+            return core.encode_image_data_url(path), str(getattr(area, "type", "UNKNOWN"))
         finally:
             try:
                 os.remove(path)
@@ -1356,87 +1815,104 @@ if bpy is not None:
 
 
     def _build_bridge_context_payload(context: Any, payload: dict[str, Any]) -> dict[str, Any]:
+        """Build read-only evidence for Blendy desktop; prompt policy lives in Electron."""
+
+        request = _sanitize_bridge_request_payload(payload)
         props = context.scene.local_ai_chat
-        prompt = str(payload.get("prompt", ""))
-        web_approved = bool(payload.get("webApproved", False))
-        web_prompt = str(payload.get("webPrompt", ""))
-        truth_path = _truth_path_for_current_file()
-        parts = _context_parts_for_prompt(
-            context,
-            props,
-            truth_path,
-            prompt,
-            knowledge_mode=str(payload.get("knowledgeMode") or props.knowledge_mode),
-            web_approved=web_approved,
-            web_prompt=web_prompt,
-        )
+        prompt = request["prompt"]
+        selection = request["contextSelection"]
+        tier = selection["tier"]
         active = context.active_object
+
+        runtime_facts = _build_bridge_runtime_facts(context, selection)
+        scene_context = _build_bridge_scene_context(context, selection)
+        snapshot_limit = {"compact": 60, "focused": 100, "expanded": 160}[tier]
+        current_snapshot = _build_scene_snapshot(context, object_limit=snapshot_limit)
+        previous_snapshot = core.load_scene_snapshot(props.last_scene_snapshot)
+        scene_diff = core.scene_snapshot_diff(previous_snapshot, current_snapshot)
+        scene_diff = _bridge_cap_text(scene_diff, tier, "scene changes")
 
         screenshot = ""
         screenshot_error = ""
-        if _bridge_should_capture_screenshot(payload):
+        active_area_error = ""
+        visual_evidence: list[dict[str, str]] = []
+        if _bridge_should_capture_screenshot(request):
             try:
-                screenshot = _capture_screenshot_data_url(props.screenshot_max_px)
+                screenshot, screenshot_kind = _capture_screenshot_data_url(
+                    props.screenshot_max_px,
+                    with_kind=True,
+                )
+                visual_evidence.append(
+                    {
+                        "kind": screenshot_kind,
+                        "label": (
+                            "Blender window overview"
+                            if screenshot_kind == "overview"
+                            else "Focused Blender editor (overview capture was unavailable)"
+                        ),
+                        "editorType": "SCREEN" if screenshot_kind == "overview" else "VIEW_3D",
+                        "dataUrl": screenshot,
+                    }
+                )
+                if screenshot_kind == "overview":
+                    try:
+                        active_data_url, editor_type = _capture_active_area_data_url(
+                            props.screenshot_max_px,
+                            selection,
+                        )
+                        visual_evidence.append(
+                            {
+                                "kind": "active_editor",
+                                "label": f"Focused {editor_type.replace('_', ' ').title()} evidence",
+                                "editorType": editor_type,
+                                "dataUrl": active_data_url,
+                            }
+                        )
+                    except Exception as exc:
+                        active_area_error = str(exc)
             except Exception as exc:
                 screenshot_error = str(exc)
 
-        if prompt.strip():
-            props.last_scene_snapshot = core.dump_scene_snapshot(parts["scene_snapshot"])
+        visual_evidence, omitted_visual_count = _bounded_visual_evidence(visual_evidence)
+        if omitted_visual_count:
+            active_area_error = (
+                f"{omitted_visual_count} capture was omitted to keep the local bridge response bounded"
+            )
+        screenshot = visual_evidence[0]["dataUrl"] if visual_evidence else ""
 
-        blend_path = Path(bpy.data.filepath) if bpy.data.filepath else None
-        project_name = blend_path.name if blend_path else "Unsaved Blender Project"
+        project = _bridge_project_payload(context)
         context_line = _bridge_context_line(context, bool(screenshot))
-        visual = "Blender screen captured" if screenshot else "Blender screen not captured"
+        if visual_evidence:
+            captured_labels = ", ".join(item["label"] for item in visual_evidence)
+            visual = f"Captured: {captured_labels}."
+        else:
+            visual = "No Blender screenshot was captured; only live runtime and scene facts are available."
         if screenshot_error:
-            visual = f"Blender screen capture failed: {screenshot_error}"
+            visual = f"Blender screen capture failed: {screenshot_error}. Live facts are still available."
+        elif active_area_error:
+            visual += f" Focused editor capture unavailable: {active_area_error}."
         visual_context = "\n".join(
             [
                 context_line,
                 visual,
-                "Blender screen screenshot is attached to this message." if screenshot else "No Blender screen screenshot is attached.",
                 (
-                    "Screen visibility check: Blendy may answer from the attached screenshot and scene data."
-                    if screenshot
-                    else "Screen visibility check: no screenshot reached the model; if the user expects screen visibility, say this and answer only from runtime/scene facts."
+                    f"Visual evidence count: {len(visual_evidence)}. Evidence labels are truthful capture scopes."
+                    if visual_evidence
+                    else "Visual evidence count: 0. Do not claim to see the Blender screen."
                 ),
             ]
         )
-        context_text = core.build_context_text(
-            prompt=(
-                f"{prompt}\n\nApproved web lookup for previous question: {parts['knowledge_prompt']}"
-                if web_approved and parts["knowledge_prompt"].strip() and parts["knowledge_prompt"].strip() != prompt.strip()
-                else prompt
-            ),
-            truth_md=parts["truth_md"],
-            scene_context=parts["scene_context"],
-            runtime_facts=parts["runtime_facts"],
-            tool_references=parts["tool_references"],
-            scene_diff=parts["scene_diff"],
-            router_decision=parts["router_decision"],
-            scene_diagnostic_flags=parts["scene_diagnostic_flags"],
-            workflow_cards=parts["workflow_cards"],
-            troubleshooting_cards=parts["troubleshooting_cards"],
-            knowledge_references=parts["knowledge_references"],
-            web_references=parts["web_references"],
-            semantic_scene_card=parts["semantic_scene_card"],
-            verification_notes=parts["verification_notes"],
-            compacted_summary="",
-            visual_context=visual_context,
-        )
-
         return {
             "ok": True,
             "bridge": {
+                "protocolVersion": BLENDY_BRIDGE_PROTOCOL_VERSION,
                 "host": BLENDY_BRIDGE_HOST,
                 "port": _active_bridge_port(),
                 "blenderVersion": bpy.app.version_string,
             },
-            "project": {
-                "name": project_name,
-                "path": str(blend_path) if blend_path else "",
-                "truthPath": str(truth_path) if truth_path else "",
-                "appDataPath": "",
-            },
+            "project": project,
+            "contextTier": tier,
+            "contextSelection": selection,
             "contextLine": context_line,
             "selected": {
                 "object": active.name if active else "None",
@@ -1452,36 +1928,21 @@ if bpy is not None:
                 "materials": _scene_material_names(context),
             },
             "visual": visual,
-            "brief": core.truncate_text(parts["truth_md"], 600) if parts["truth_md"] else "No Project Brief yet.",
             "used": {
-                "screenshot": bool(screenshot),
-                "screenshotReason": str(payload.get("screenshot", "never")),
-                "knowledgeMode": parts["knowledge_status"].get("mode", core.DEFAULT_KNOWLEDGE_MODE),
+                "screenshot": bool(visual_evidence),
+                "screenshotOverview": bool(visual_evidence and visual_evidence[0]["kind"] == "overview"),
+                "activeEditorScreenshot": any(item["kind"] == "active_editor" for item in visual_evidence),
+                "screenshotReason": request["screenshot"],
+                "contextTier": tier,
+                "knowledgeMode": "desktop_managed",
             },
             "promptParts": {
-                "system_prompt": core.SYSTEM_PROMPT,
-                "context_text": context_text,
-                "knowledge_prompt": parts["knowledge_prompt"],
-                "web_approved": parts["web_approved"],
-                "truth_md": parts["truth_md"],
-                "scene_context": parts["scene_context"],
-                "scene_diff": parts["scene_diff"],
-                "runtime_facts": parts["runtime_facts"],
-                "tool_references": parts["tool_references"],
-                "router_decision": parts["router_decision"],
-                "scene_diagnostic_flags": parts["scene_diagnostic_flags"],
-                "workflow_cards": parts["workflow_cards"],
-                "troubleshooting_cards": parts["troubleshooting_cards"],
-                "router_trace": parts["router_trace"],
-                "knowledge_references": parts["knowledge_references"],
-                "web_references": parts["web_references"],
-                "semantic_scene_card": parts["semantic_scene_card"],
-                "verification_notes": parts["verification_notes"],
-                "knowledge_status": parts["knowledge_status"],
-                "knowledge_sources": parts["knowledge_sources"],
-                "compacted_summary": parts["compacted_summary"],
+                "scene_context": scene_context,
+                "scene_diff": scene_diff,
+                "runtime_facts": runtime_facts,
             },
-            "screenshotDataUrl": screenshot,
+            "visualEvidence": visual_evidence,
+            "_sceneSnapshot": core.dump_scene_snapshot(current_snapshot) if prompt.strip() else "",
         }
 
 
@@ -1492,9 +1953,15 @@ if bpy is not None:
             "event": event,
             "result": None,
             "error": None,
+            "cancelled": False,
+            "deadline": time.monotonic() + timeout,
         }
-        _BRIDGE_JOB_QUEUE.put(job)
+        try:
+            _BRIDGE_JOB_QUEUE.put_nowait(job)
+        except queue.Full as exc:
+            raise _BridgeBusyError("Blender is already preparing context. Try again in a moment.") from exc
         if not event.wait(timeout):
+            job["cancelled"] = True
             raise TimeoutError("Blender did not return context before the bridge timeout.")
         if job["error"]:
             raise RuntimeError(str(job["error"]))
@@ -1502,13 +1969,25 @@ if bpy is not None:
 
 
     def _process_bridge_jobs() -> None:
-        while True:
+        for _ in range(BLENDY_BRIDGE_MAX_JOBS_PER_TICK):
             try:
                 job = _BRIDGE_JOB_QUEUE.get_nowait()
             except queue.Empty:
                 break
+            if job.get("cancelled") or time.monotonic() >= float(job.get("deadline", 0)):
+                job["cancelled"] = True
+                job["event"].set()
+                continue
             try:
-                job["result"] = _build_bridge_context_payload(bpy.context, job["payload"])
+                result = _build_bridge_context_payload(bpy.context, job["payload"])
+                snapshot = str(result.pop("_sceneSnapshot", ""))
+                if job.get("cancelled") or time.monotonic() >= float(job.get("deadline", 0)):
+                    job["cancelled"] = True
+                    job["error"] = "Context request expired before it could be returned."
+                else:
+                    if snapshot:
+                        bpy.context.scene.local_ai_chat.last_scene_snapshot = snapshot
+                    job["result"] = result
             except Exception as exc:
                 job["error"] = str(exc)
             finally:
@@ -1516,7 +1995,7 @@ if bpy is not None:
 
 
     class _BlendyBridgeHandler(BaseHTTPRequestHandler):
-        server_version = "BlendyBridge/1.0.5"
+        server_version = "BlendyBridge/2.0.0"
 
         def log_message(self, format: str, *args: Any) -> None:
             return None
@@ -1526,16 +2005,28 @@ if bpy is not None:
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
 
+        def _require_safe_origin(self) -> bool:
+            if _bridge_origin_allowed(self.headers):
+                return True
+            self._send_json(403, {"ok": False, "error": "Browser origin is not allowed."})
+            return False
+
+        def _require_token(self) -> bool:
+            if _bridge_token_matches(self.headers):
+                return True
+            self._send_json(401, {"ok": False, "error": "Bridge token is missing or invalid."})
+            return False
+
         def do_OPTIONS(self) -> None:
-            self._send_json(200, {"ok": True})
+            self._send_json(403, {"ok": False, "error": "Browser requests are not accepted."})
 
         def do_GET(self) -> None:
+            if not self._require_safe_origin() or not self._require_token():
+                return
             route = self.path.split("?", 1)[0]
             if route != "/health":
                 self._send_json(404, {"ok": False, "error": "Unknown endpoint."})
@@ -1545,6 +2036,7 @@ if bpy is not None:
                 {
                     "ok": True,
                     "name": "Blendy Blender bridge",
+                    "protocolVersion": BLENDY_BRIDGE_PROTOCOL_VERSION,
                     "blenderVersion": bpy.app.version_string,
                     "port": _active_bridge_port(),
                 },
@@ -1555,39 +2047,67 @@ if bpy is not None:
             if route != "/context":
                 self._send_json(404, {"ok": False, "error": "Unknown endpoint."})
                 return
+            if not self._require_safe_origin() or not self._require_token():
+                return
             try:
-                length = int(self.headers.get("Content-Length", "0") or "0")
-                if length > 2_000_000:
+                transfer_encoding = _header_value(self.headers, "Transfer-Encoding")
+                if transfer_encoding:
+                    self._send_json(400, {"ok": False, "error": "Chunked request bodies are not accepted."})
+                    return
+                content_type = _header_value(self.headers, "Content-Type").lower()
+                media_type = content_type.split(";", 1)[0].strip()
+                if media_type != "application/json":
+                    self._send_json(415, {"ok": False, "error": "Content-Type must be application/json."})
+                    return
+                try:
+                    length = _validated_bridge_content_length(
+                        _header_value(self.headers, "Content-Length")
+                    )
+                except OverflowError:
                     self._send_json(413, {"ok": False, "error": "Request body is too large."})
                     return
+                except ValueError:
+                    self._send_json(400, {"ok": False, "error": "Content-Length is invalid."})
+                    return
                 raw = self.rfile.read(length) if length else b"{}"
-                payload = json.loads(raw.decode("utf-8") or "{}")
-                if not isinstance(payload, dict):
-                    raise ValueError("Request JSON must be an object.")
+                if len(raw) != length:
+                    self._send_json(400, {"ok": False, "error": "Request body is incomplete."})
+                    return
+                payload = json.loads(raw.decode("utf-8", errors="strict") or "{}")
+                payload = _sanitize_bridge_request_payload(payload)
                 result = _submit_bridge_job(payload)
                 self._send_json(200, result)
+            except _BridgeBusyError as exc:
+                self._send_json(429, {"ok": False, "error": str(exc)})
             except TimeoutError as exc:
                 self._send_json(504, {"ok": False, "error": str(exc)})
-            except Exception as exc:
-                self._send_json(500, {"ok": False, "error": str(exc)})
+            except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+                self._send_json(400, {"ok": False, "error": f"Invalid request: {exc}"})
+            except Exception:
+                self._send_json(500, {"ok": False, "error": "Blender could not prepare context."})
 
 
     def _write_bridge_discovery(port: int) -> None:
-        try:
-            blend_path = bpy.data.filepath or ""
-        except AttributeError:
-            blend_path = ""
         payload = {
-            "version": 1,
+            "version": 2,
+            "protocolVersion": BLENDY_BRIDGE_PROTOCOL_VERSION,
             "host": BLENDY_BRIDGE_HOST,
             "port": port,
             "url": f"http://{BLENDY_BRIDGE_HOST}:{port}",
+            "token": _BRIDGE_TOKEN,
+            "tokenHeader": BLENDY_BRIDGE_TOKEN_HEADER,
             "pid": os.getpid(),
             "blenderVersion": bpy.app.version_string,
-            "blendPath": blend_path,
         }
-        _bridge_discovery_path().parent.mkdir(parents=True, exist_ok=True)
-        _bridge_discovery_path().write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        path = _bridge_discovery_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        try:
+            os.chmod(temporary, 0o600)
+        except OSError:
+            pass
+        temporary.replace(path)
 
 
     def _clear_bridge_discovery(port: int | None) -> None:
@@ -1604,9 +2124,10 @@ if bpy is not None:
 
 
     def _start_bridge_server() -> None:
-        global _BRIDGE_SERVER, _BRIDGE_THREAD, _BRIDGE_PORT
+        global _BRIDGE_SERVER, _BRIDGE_THREAD, _BRIDGE_PORT, _BRIDGE_TOKEN
         if _BRIDGE_SERVER is not None:
             return
+        _BRIDGE_TOKEN = secrets.token_urlsafe(32)
         server = None
         last_error = None
         for offset in range(BLENDY_BRIDGE_PORT_SCAN_COUNT):
@@ -1623,6 +2144,7 @@ if bpy is not None:
                 f"{BLENDY_BRIDGE_DEFAULT_PORT}-{BLENDY_BRIDGE_DEFAULT_PORT + BLENDY_BRIDGE_PORT_SCAN_COUNT - 1}: {last_error}"
             )
             _BRIDGE_PORT = None
+            _BRIDGE_TOKEN = ""
             return
         server.daemon_threads = True
         thread = threading.Thread(target=server.serve_forever, name="BlendyBridge", daemon=True)
@@ -1633,12 +2155,13 @@ if bpy is not None:
 
 
     def _stop_bridge_server() -> None:
-        global _BRIDGE_SERVER, _BRIDGE_THREAD, _BRIDGE_PORT
+        global _BRIDGE_SERVER, _BRIDGE_THREAD, _BRIDGE_PORT, _BRIDGE_TOKEN
         server = _BRIDGE_SERVER
         port = _BRIDGE_PORT
         _BRIDGE_SERVER = None
         _BRIDGE_THREAD = None
         _BRIDGE_PORT = None
+        _BRIDGE_TOKEN = ""
         if server is None:
             return
         try:
@@ -1646,6 +2169,14 @@ if bpy is not None:
             server.server_close()
         except Exception:
             pass
+        while True:
+            try:
+                job = _BRIDGE_JOB_QUEUE.get_nowait()
+            except queue.Empty:
+                break
+            job["cancelled"] = True
+            job["error"] = "Blender bridge stopped."
+            job["event"].set()
         _clear_bridge_discovery(port)
 
 
@@ -1742,6 +2273,8 @@ if bpy is not None:
         def execute(self, context: Any) -> set[str]:
             props = context.scene.local_ai_chat
             try:
+                if _BRIDGE_PORT is not None:
+                    _write_bridge_discovery(_BRIDGE_PORT)
                 message = _launch_blendy_process()
             except Exception as exc:
                 props.status_kind = "ERROR"
@@ -2198,23 +2731,15 @@ if bpy is not None:
                 status.label(text=props.status_text[:90], icon=_status_icon(props.status_kind))
 
 
+    # Blendy 2 has one prompt/model runtime: the Electron companion. The older
+    # in-panel chat operators remain below only as migration-readable source;
+    # they are deliberately not registered and therefore cannot compete with
+    # the desktop prompt, persistence, tool, or privacy policies.
     classes = (
         LOCALAI_Message,
         LOCALAI_ChatLine,
-        LOCALAI_UL_ChatLines,
         LOCALAI_Properties,
         LOCALAI_OT_LaunchBlendy,
-        LOCALAI_OT_TestConnection,
-        LOCALAI_OT_Send,
-        LOCALAI_OT_CompactChat,
-        LOCALAI_OT_NewChat,
-        LOCALAI_OT_OpenChatText,
-        LOCALAI_OT_ConnectionPopup,
-        LOCALAI_OT_SettingsPopup,
-        LOCALAI_OT_ProjectMemoryPopup,
-        LOCALAI_OT_ChatPage,
-        LOCALAI_OT_CreateTruth,
-        LOCALAI_OT_OpenTruth,
         LOCALAI_PT_Panel,
     )
 

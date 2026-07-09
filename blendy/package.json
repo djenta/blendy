@@ -1,12 +1,15 @@
 {
   "name": "blendy",
-  "version": "1.0.6",
+  "version": "2.0.0",
   "private": true,
   "description": "Local AI Tutor for Blender.",
   "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k \"vite --host 127.0.0.1 --port 5187 --strictPort\" \"wait-on http://127.0.0.1:5187 && electron .\"",
+    "test": "npm run test:node && npm run test:python",
+    "test:node": "node ../tests/run_node_tests.cjs",
+    "test:python": "cd .. && python -m unittest discover -s tests -p \"test_*.py\"",
     "build": "tsc && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 5187 --strictPort",
     "start": "electron .",
@@ -14,7 +17,6 @@
     "dist": "npm run build && electron-builder --win nsis"
   },
   "dependencies": {
-    "geist": "^1.7.2",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
@@ -24,8 +26,8 @@
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^9.1.0",
-    "electron": "^33.2.1",
-    "electron-builder": "^25.1.8",
+    "electron": "^43.1.0",
+    "electron-builder": "^26.15.3",
     "typescript": "^5.7.2",
     "vite": "^6.0.3",
     "wait-on": "^8.0.1"
@@ -57,6 +59,10 @@
       {
         "from": "build/install-blender-addon.ps1",
         "to": "installer/install-blender-addon.ps1"
+      },
+      {
+        "from": "build/uninstall-blender-addon.ps1",
+        "to": "installer/uninstall-blender-addon.ps1"
       }
     ],
     "directories": {

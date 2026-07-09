@@ -1,170 +1,109 @@
-# Blendy Prototype Spec
+# Blendy 2 Product Contract
 
-Blendy is a Windows desktop companion app for Blender tutoring. The first
-prototype validates the floating app shell and user experience before wiring
-the full Blender bridge and LM Studio backend.
+This filename is retained for old links. It now describes the shipped Blendy 2
+architecture rather than the original prototype.
 
-## Product Shape
+## Product Promise
 
-- Windows-only v1.
-- Electron + React + Vite prototype.
-- Real always-on-top desktop window, not a browser mockup.
-- Custom frameless, rounded, draggable, resizable window.
-- Pinned-on-top by default, with a pin toggle in the top bar.
-- Manual launch from Blender's N panel later; no autostart for v1.
-- Blender add-on becomes the lightweight bridge. Blendy owns chat, prompts,
-  model calls, settings, app data, and display.
+Blendy is a Windows desktop companion that teaches Blender one checkpoint at a
+time using a local LM Studio model. It should answer four beginner questions
+clearly:
 
-## Brand
+- Is the tutor actually ready?
+- What should I do next?
+- Where is that control?
+- Did my change work?
 
-- App name: Blendy.
-- Version label in top bar: `Blendy 1.0.5`.
-- Logo asset: tracked app artwork under `blendy/src/assets/`.
-- Logo use:
-  - Windows app icon.
-  - Small top-left app mark beside `Blendy 1.0.5`.
-  - Subtle empty-state mark.
-  - Do not repeat in message rows.
+The app stays tutor-only. It can inspect read-only evidence, but it does not run
+model-written Blender Python or change the scene.
 
-## Themes
+## Runtime Ownership
 
-- `Scholastic Solar`: warm light, Claude-inspired mood, solid warm surface,
-  charcoal text, restrained warm accent.
-- `Neon Sprint`: dark slate, legible digital/gruff mood, cyan/neon green
-  accents inspired by sci-fi UI without copying any source.
-- Mostly solid surfaces. Avoid readability-breaking transparency.
+- Electron owns chat persistence, prompts, model discovery, LM Studio calls,
+  tools, privacy policy, receipts, and diagnostics.
+- React owns the visible coach workflow, settings, readiness, notebook,
+  references, and recovery states.
+- The Blender add-on owns a loopback-only authenticated bridge that captures
+  bounded scene facts and truthful screenshots on Blender's main thread.
+- The legacy Blender chat/model operators are not registered.
 
-## Typography
+The active backend source of truth is `blendy/electron/backend.cjs`.
 
-- Typeface setting with `Geist` and `Red Hat Display`.
-- Default typeface: Geist.
-- Numeric text size setting.
-- Recommended default: 15px.
-- Range: 14px to 20px, 1px steps.
+## Main Coaching Loop
 
-## Main Chat Experience
+1. The user describes what they are making or what is wrong.
+2. Blendy captures the smallest useful Blender evidence tier.
+3. The selected local model gives a direct answer, one small action, and a
+   simple done-when check.
+4. The latest answer becomes the current checkpoint.
+5. The user chooses `Check my work`, `I am stuck`, or `Show me where`.
+6. Blendy captures fresh evidence and continues from the observed result.
 
-- Professional chat-thread style, not cartoon/iMessage bubbles.
-- User messages are compact and distinct.
-- Blendy responses are open, readable text blocks.
-- No repeated avatars.
-- No timestamps in v1.
-- No command buttons in v1.
-- Enter sends. Shift+Enter inserts a newline.
-- Responses stream in later, but the prototype can use simulated messages.
-- Streaming must not pull the scroll position away when the user is reading
-  older content.
-- Completion feedback should be subtle and visual only. No sounds.
+## Readiness
 
-## Context Grounding
+The top readiness surface reports Blender, LM Studio, loaded model, chat,
+vision, and tool capabilities. It must distinguish these states:
 
-- Every Send will inspect Blender first once backend integration exists.
-- No manual Inspect button in v1.
-- Auto screenshot inclusion sends Blender screen context with every non-empty
-  prompt when Visual is enabled.
-- Manual Capture control is secondary in the Visual context area.
-- No confirmation prompts before local screenshot use.
-- Full screenshots are temporary and deleted after send.
-- No per-message screenshot thumbnail history.
-- User message shows compact context line, for example:
-  `Used: Units mm · Cube selected · Bevel 0.01mm / 5 seg · Viewport inspected`
-- Context line can expand later to show exact captured context.
+- ready with scene and model evidence
+- LM Studio reachable but no chat model loaded
+- model ready but Blender disconnected, allowing general guidance
+- neither runtime ready, with plain corrective instructions
 
-## Prompting And Retrieval Policy
+Raw model ID and token settings remain under Advanced controls.
 
-See `docs/blendy-vision-and-prompting-policy.md` for the current product
-contract.
+## Project Continuity
 
-- Blendy should behave like a natural local chat tutor with extra Blender
-  evidence, not like a scripted router.
-- The model-facing packet should always include the user's prompt, live Blender
-  scene/runtime facts, and screenshot status.
-- In Tool Use Auto mode, the model-facing packet should include read-only tool
-  definitions for Blender docs, workflow notes, web search, and URL fetching.
-- Docs, workflow notes, troubleshooting notes, and web references should appear
-  only after the model requests a tool. They should not be preselected as a
-  route or replace the user's natural-language intent.
-- Guardrails should protect evidence quality and honesty: do not fake screen
-  visibility, web results, Blender state, or completed actions.
-- The context meter should count tool definitions, tool-result reserve, and
-  screenshot reserve so the bar reflects the real practical context budget.
+The Project Notebook belongs to a chat, not to a file. It is the user's visible
+place for goals, visual direction, measurements, decisions, and constraints.
+Chats remain usable across unsaved files and related scenes.
 
-## Context Drawer
+When both paths are known and the active `.blend` differs from the last scene
+seen in that chat, Blendy warns instead of silently mixing context. The user can
+acknowledge the scene or create a new chat. No automatic file binding occurs.
 
-- Context remains a drawer/panel available from chat.
-- Settings is a full app page, not a popover.
-- Drawer content should avoid clutter and default to Scene/Selected facts.
-- Drawer sections:
-  - Selected
-  - Modifiers
-  - Scene
-  - Visual
-  - Project Brief
-- The Project Brief is `truth.md` under the hood, but called Project Brief in UI.
-- Blendy reads Project Brief often, especially on Send.
-- Project Brief updates require user approval.
+## Interaction And Accessibility
 
-## Settings Page
+- The supported minimum window is 380 by 520 pixels.
+- Interactive targets are at least 40 pixels.
+- All controls have keyboard focus treatment.
+- Dialogs receive focus, trap focus, close on Escape, and restore focus.
+- Motion communicates work or state change and respects reduced-motion.
+- Slow local inference exposes named stages and a Stop action.
+- Operational errors retry their own operation. Model retry is reserved for a
+  failed answer.
 
-- Settings replaces the chat page while open.
-- Top bar remains visible.
-- Back button returns to chat.
-- Settings groups:
-  - Theme
-  - Typeface
-  - Text size
-  - Tutor style
-  - LM Studio
-  - Window
-  - Screenshot
-  - Project
-  - Diagnostics
-- Tutor style options:
-  - Balanced
-  - Detailed
-- No Short mode.
-- Style changes answer depth, not factual grounding.
+## Privacy And Safety
+
+- Default external-web policy is `Ask me`.
+- Local Blender reference tools remain usable in `Local only`.
+- Bridge context requires a rotating capability token and a bounded JSON body.
+- Browser origins are denied except explicit app schemes.
+- Web content is size, time, redirect, content-type, DNS, and private-network
+  limited and is always treated as untrusted text.
+- Evidence receipts are based on completed tool activity, not planned activity.
 
 ## Persistence
 
-- Blendy gets its own app data folder.
-- Prototype persists:
-  - Theme
-  - Typeface
-  - Text size
-  - Window size
-  - Window position
-  - Pinned state
-- Full chat history later lives in Blendy app data per `.blend` project, not
-  inside `.blend` files.
+Stored in the user's Blendy app-data folder:
 
-## Installer Direction
+- settings and window state
+- chats and per-chat Project Notebooks
+- compacted conversation summaries
+- prompt diagnostics and evidence receipts
+- bridge discovery metadata
 
-- Project should be shaped toward a Windows installer.
-- Use electron-builder later for NSIS installer.
-- Installer should eventually install both:
-  - Blendy desktop app.
-  - Blender bridge add-on.
-- Blender version detection should inspect installed local versions and use the
-  newest detected Blender add-ons folder, not a hardcoded Blender version.
+Reference image data is sent for the active turn and is not added to chat
+history. Full screenshots are evidence for the turn, not a gallery feature.
 
-## Prototype Scope
+## Release Acceptance
 
-Included now:
-- Electron floating shell.
-- Always-on-top and pinned toggle.
-- Frameless rounded UI.
-- Logo in top bar.
-- Scholastic Solar and Neon Sprint themes.
-- Typeface and text size settings.
-- Chat thread mock data.
-- Context chips and context drawer.
-- Settings page.
-- Persistent settings and window state.
+A release is ready only when all of the following pass:
 
-Not included yet:
-- Real Blender bridge endpoints.
-- Real LM Studio calls.
-- Streaming model responses.
-- Per-project chat app data.
-- Installer packaging.
+- Python bridge and context tests
+- executable Node backend and UI tests
+- TypeScript and Vite production build
+- dependency audit with no high or critical shipped vulnerability
+- local NSIS build and rollback-safe add-on install
+- installed-app smoke test at normal and minimum window sizes
+- diff-scoped security scan with every changed source file reviewed
+- GitHub CI on the merged main commit

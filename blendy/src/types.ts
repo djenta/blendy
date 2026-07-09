@@ -3,6 +3,48 @@ export type PageName = "chat" | "settings";
 export type KnowledgeMode = "LOCAL_AUTO_WEB" | "LOCAL_ONLY" | "ASK_BEFORE_WEB";
 export type ToolUseMode = "AUTO" | "OFF";
 
+export interface ModelStatus {
+  reachable: boolean;
+  modelId?: string;
+  displayName?: string;
+  loaded?: boolean;
+  chatCapable?: boolean;
+  vision?: boolean | null;
+  toolUse?: boolean | null;
+  contextLength?: number;
+  architecture?: string;
+  error?: string;
+}
+
+export interface ProjectNotebook {
+  text: string;
+  lastScenePath?: string;
+  lastSceneName?: string;
+  sceneMismatch?: boolean;
+  currentScenePath?: string;
+  currentSceneName?: string;
+}
+
+export interface ToolTraceEntry {
+  round?: number;
+  call?: {
+    id?: string;
+    name?: string;
+    arguments?: unknown;
+  };
+  ok?: boolean;
+  resultPreview?: string;
+  sourceUrls?: string[];
+  name?: string;
+  status?: string;
+  summary?: string;
+  safety?: string;
+  screenshotUsed?: boolean;
+  sceneUsed?: boolean;
+  query?: string;
+  url?: string;
+}
+
 export interface AppSettings {
   theme: ThemeName;
   textSize: number;
@@ -15,6 +57,7 @@ export interface BackendSettings {
   responseMaxTokens: number;
   contextLimitTokens: number;
   toolUse: ToolUseMode;
+  userInstructions: string;
   knowledgeMode: KnowledgeMode;
 }
 
@@ -24,12 +67,25 @@ export interface Message {
   content: string;
   context?: string;
   receipt?: AssistantReceipt;
-  status?: "done" | "streaming" | "failed";
+  status?: "done" | "streaming" | "failed" | "cancelled";
   marker?: "compacted";
 }
 
 export interface AssistantReceipt {
   labels?: string[];
+  summary?: string;
+  usedScreenshot?: boolean;
+  usedScene?: boolean;
+  safety?: string;
+  finishReason?: string;
+  toolTrace?: ToolTraceEntry[];
+  sources?: Array<{
+    title?: string;
+    url?: string;
+    host?: string;
+    authority?: string;
+    confidence?: number;
+  }>;
   cards?: Array<{
     id: string;
     title: string;
@@ -79,7 +135,6 @@ export interface ChatSession {
 
 export interface ContextSnapshot {
   project: string;
-  projectBriefPath: string;
   appDataPath: string;
   units: string;
   selectedObject: string;
@@ -138,6 +193,8 @@ export interface BackendState {
   context: ContextSnapshot;
   messages: Message[];
   backendSettings: BackendSettings;
+  modelStatus?: ModelStatus;
+  projectNotebook?: ProjectNotebook;
   diagnostics: {
     chatKey: string;
     chatPath: string;
@@ -150,7 +207,18 @@ export interface BackendState {
 
 export type ChatEvent =
   | { type: "assistant-delta"; id: string; delta: string }
-  | { type: "assistant-done"; id: string; content: string }
+  | { type: "assistant-stage"; id: string; stage: string; label: string }
+  | { type: "assistant-cancelled"; id: string; content?: string }
+  | {
+      type: "assistant-done";
+      id: string;
+      content: string;
+      receipt?: AssistantReceipt | { line?: string; details?: AssistantReceipt };
+      toolTrace?: ToolTraceEntry[];
+      sources?: Array<{ title?: string; url?: string }>;
+      finishReason?: string;
+    }
+  | { type: "assistant-cancelled"; id: string; content: string }
   | { type: "assistant-error"; id: string; error: string };
 
 export interface SendMessageResult {
@@ -158,6 +226,8 @@ export interface SendMessageResult {
   assistantMessage: Message;
   messages?: Message[];
   context: ContextSnapshot;
+  modelStatus?: ModelStatus;
+  projectNotebook?: ProjectNotebook;
   diagnostics?: {
     chatKey: string;
     chatPath: string;
@@ -170,6 +240,8 @@ export interface SendMessageResult {
 export interface ChatActionResult {
   messages: Message[];
   context: ContextSnapshot;
+  modelStatus?: ModelStatus;
+  projectNotebook?: ProjectNotebook;
   diagnostics?: {
     chatKey: string;
     chatPath: string;
