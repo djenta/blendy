@@ -303,6 +303,14 @@ const lmServer = http.createServer(async (request, response) => {
       ipcMain: harness.ipcMain,
     });
 
+    const backendSettings = {
+      lmStudioBaseUrl: `http://127.0.0.1:${lmPort}/v1`,
+      model: "auto",
+      toolUse: "AUTO",
+      knowledgeMode: "ASK_BEFORE_WEB",
+    };
+    await harness.invoke("blendy:save-backend-settings", backendSettings);
+
     const state = await harness.invoke("blendy:get-state");
     assert.strictEqual(state.context.bridgeOk, true);
     assert.strictEqual(state.context.bridgeSource, "discovery");
@@ -319,12 +327,7 @@ const lmServer = http.createServer(async (request, response) => {
     const firstSend = await harness.invoke("blendy:send-message", {
       chatId,
       prompt: firstPrompt,
-      backendSettings: {
-        lmStudioBaseUrl: `http://127.0.0.1:${lmPort}/v1`,
-        model: "auto",
-        toolUse: "AUTO",
-        knowledgeMode: "ASK_BEFORE_WEB",
-      },
+      backendSettings,
     });
     const firstAssistantId = firstSend.assistantMessage.id;
     const doneEvent = await waitFor(
