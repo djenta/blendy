@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { KeyboardEvent, useEffect, useRef, useState } from "react";
 import logoUrl from "./assets/blendy-header-mark.png";
+import { inferReferenceMimeType } from "./referenceImages";
 import { contextSnapshot as mockContextSnapshot, seedMessages } from "./data";
 import {
   CurrentCheckpoint,
@@ -120,13 +121,49 @@ function contextButtonLabel(contextSnapshot: ContextSnapshot): string {
   return `Context ${formatTokens(used)} / ${formatTokens(limit)}. Conversation ${formatTokens(conversation)}. Tools ${formatTokens(tools)}. Screenshot ${formatTokens(screenshot)}.`;
 }
 
-function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
-    reader.readAsDataURL(file);
-  });
+const MAX_REFERENCE_SOURCE_BYTES = 32 * 1024 * 1024;
+const MAX_REFERENCE_OUTPUT_BYTES = 8 * 1024 * 1024;
+const MAX_REFERENCE_EDGE = 2048;
+
+function decodedDataUrlBytes(dataUrl: string): number {
+  const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor((base64.length * 3) / 4) - padding);
+}
+
+async function prepareReferenceImage(file: File, preferredMimeType: string): Promise<string> {
+  let bitmap: ImageBitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch (_error) {
+    throw new Error(`${file.name} could not be decoded as a photo. Open it in Photos and save a JPG or PNG copy, then try again.`);
+  }
+  try {
+    const scale = Math.min(1, MAX_REFERENCE_EDGE / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext("2d", { alpha: preferredMimeType === "image/png" });
+    if (!context) throw new Error(`${file.name} could not be prepared for LM Studio.`);
+    if (preferredMimeType !== "image/png") {
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+    }
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const outputType = preferredMimeType === "image/png" || preferredMimeType === "image/webp"
+      ? preferredMimeType
+      : "image/jpeg";
+    let dataUrl = canvas.toDataURL(outputType, 0.9);
+    if (decodedDataUrlBytes(dataUrl) > MAX_REFERENCE_OUTPUT_BYTES) {
+      dataUrl = canvas.toDataURL("image/jpeg", 0.82);
+    }
+    if (decodedDataUrlBytes(dataUrl) > MAX_REFERENCE_OUTPUT_BYTES) {
+      throw new Error(`${file.name} is still too detailed after resizing. Export a smaller JPG and try again.`);
+    }
+    return dataUrl;
+  } finally {
+    bitmap.close();
+  }
 }
 
 function receiptContextLabel(receipt?: AssistantReceipt, toolTrace?: AssistantReceipt["toolTrace"]) {
@@ -703,22 +740,21 @@ function App() {
       return;
     }
     const candidates = Array.from(files).slice(0, remaining);
-    const allowed = new Set(["image/png", "image/jpeg", "image/webp"]);
-    const invalid = candidates.find((file) => !allowed.has(file.type));
+    const invalid = candidates.find((file) => !inferReferenceMimeType(file.name, file.type));
     if (invalid) {
-      setReferenceError(`${invalid.name} is not a PNG, JPEG, or WebP image.`);
+      setReferenceError(`${invalid.name} is not a supported photo. Choose a PNG, JPG, or WebP image.`);
       return;
     }
-    const tooLarge = candidates.find((file) => file.size > 6 * 1024 * 1024);
+    const tooLarge = candidates.find((file) => file.size > MAX_REFERENCE_SOURCE_BYTES);
     if (tooLarge) {
-      setReferenceError(`${tooLarge.name} is over 6 MB. Choose a smaller image.`);
+      setReferenceError(`${tooLarge.name} is over 32 MB. Export a smaller copy, then try again.`);
       return;
     }
     try {
       const loaded = await Promise.all(candidates.map(async (file) => ({
         id: crypto.randomUUID(),
         name: file.name,
-        dataUrl: await fileToDataUrl(file),
+        dataUrl: await prepareReferenceImage(file, inferReferenceMimeType(file.name, file.type)),
       })));
       setReferenceImages((current) => [...current, ...loaded].slice(0, 2));
       if (files.length > remaining) setReferenceError("Only the first two reference images were added.");
@@ -1098,9 +1134,7 @@ function App() {
           <img className="brand-logo" src={logoUrl} alt="" />
           <div>
             <div className="brand-name">Blendy Studio Coach</div>
-            <div className="brand-subtitle">
-              {page === "settings" ? "Settings" : latestDone ? "Checkpoint ready" : isGenerating ? generationStage?.label || "Preparing answer" : "Local Blender tutor"}
-            </div>
+            <div className="brand-subtitle">Local Blender guidance</div>
           </div>
         </div>
 
@@ -1308,17 +1342,14 @@ function App() {
                   New text
                 </button>
               )}
-              {latestAssistant && (
-                <CurrentCheckpoint content={latestAssistant.content} disabled={isGenerating} onFollowUp={sendPrompt} />
-              )}
               <footer className="composer">
                 <ReferenceAttachmentTray
                   images={referenceImages}
                   error={referenceError}
-                  disabled={isGenerating}
                   supportsVision={modelStatus?.vision !== false}
                   onChoose={addReferenceFiles}
                   onRemove={(id) => setReferenceImages((current) => current.filter((image) => image.id !== id))}
+                  actions={latestAssistant ? <CurrentCheckpoint disabled={isGenerating} onFollowUp={sendPrompt} /> : undefined}
                 />
                 <div className="composer-input-row">
                   <textarea

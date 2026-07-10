@@ -1856,8 +1856,18 @@ function sanitizeReferenceImages(images) {
       throw new Error("Reference images must be PNG, JPEG, or WebP image data.");
     }
     const base64 = match[2].replace(/\s+/g, "");
-    if (Buffer.byteLength(base64, "base64") > MAX_REFERENCE_IMAGE_BYTES) {
+    const bytes = Buffer.from(base64, "base64");
+    if (bytes.length > MAX_REFERENCE_IMAGE_BYTES) {
       throw new Error("Each reference image must be 8 MB or smaller.");
+    }
+    const type = match[1].toLowerCase();
+    const valid = type === "png"
+      ? bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+      : type === "jpeg"
+        ? bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+        : bytes.length >= 12 && bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP";
+    if (!valid) {
+      throw new Error("A reference could not be decoded as a valid PNG, JPEG, or WebP image. Re-save the photo and attach the new copy.");
     }
     result.push(`data:image/${match[1].toLowerCase()};base64,${base64}`);
   }

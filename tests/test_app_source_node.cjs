@@ -4,6 +4,8 @@ const path = require("path");
 
 const repoRoot = path.resolve(__dirname, "..");
 const appSource = fs.readFileSync(path.join(repoRoot, "blendy", "src", "App.tsx"), "utf8");
+const studioSource = fs.readFileSync(path.join(repoRoot, "blendy", "src", "StudioCoach.tsx"), "utf8");
+const stylesSource = fs.readFileSync(path.join(repoRoot, "blendy", "src", "styles.css"), "utf8");
 const mainSource = fs.readFileSync(path.join(repoRoot, "blendy", "electron", "main.cjs"), "utf8");
 const preloadSource = fs.readFileSync(path.join(repoRoot, "blendy", "electron", "preload.cjs"), "utf8");
 
@@ -36,6 +38,31 @@ assert(appSource.includes("cancelMessage"), "Generation should provide a cancell
 assert(appSource.includes("<CurrentCheckpoint"), "Completed answers should expose checkpoint recovery actions.");
 assert(appSource.includes("saveChatNotebook"), "Project notebook changes should be saved per chat.");
 assert(appSource.includes("referenceImages"), "Composer should send attached reference images to the local model.");
+assert(
+  appSource.includes('Local Blender guidance'),
+  "The titlebar subtitle should stay short and static instead of repeating generation stages.",
+);
+assert(
+  !appSource.includes('disabled={isGenerating}\n                  supportsVision'),
+  "Reference images should remain selectable for the next turn while the current answer is generating.",
+);
+assert(
+  appSource.includes("inferReferenceMimeType"),
+  "Desktop image validation should fall back to the filename when Windows omits the MIME type.",
+);
+assert(
+  studioSource.includes('accept="image/*,.png,.jpg,.jpeg,.jfif,.webp,.bmp,.gif,.avif,.heic,.heif,.tif,.tiff"'),
+  "The desktop picker should expose normal image files by MIME type and extension.",
+);
+assert(appSource.includes("prepareReferenceImage"), "Selected photos should be decoded and re-encoded before LM Studio receives them.");
+assert(
+  !studioSource.includes('<span><Compass size={16} /> Current checkpoint</span>'),
+  "The composer should not repeat the latest answer inside a separate checkpoint summary.",
+);
+assert(
+  stylesSource.includes(".readiness-panel.compact"),
+  "Readiness and generation controls should float compactly instead of consuming a full chat row.",
+);
 assert(appSource.includes('label="Web access"'), "Settings should separate web policy from tool use.");
 assert(appSource.includes('"ASK_BEFORE_WEB"'), "Ask before web should be offered as the safe web policy.");
 assert(appSource.includes("modelStatus"), "Settings and chat should surface loaded model capabilities.");

@@ -107,7 +107,7 @@ const lmRequests = [];
 const events = [];
 const bridgeToken = "test-bridge-v2-token";
 const modelId = "google/gemma-4-26b-a4b-qat";
-const imageDataUrl = `data:image/png;base64,${Buffer.from("fake-png-for-lifecycle-test").toString("base64")}`;
+const imageDataUrl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 const firstPrompt = "Give me one bevel checkpoint for this test object.";
 const cancelPrompt = "CANCEL_STREAM_LIFECYCLE_TEST";
 const notebookText = "Project: a small retro radio. Keep the corners soft and the controls oversized.";

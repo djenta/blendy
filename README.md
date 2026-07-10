@@ -6,7 +6,7 @@ context, and does not execute model-written Blender Python.
 
 ## Download
 
-[![Download Blendy 2.0.0 for Windows](https://img.shields.io/badge/Download-Blendy%202.0.0%20for%20Windows-2ea44f?style=for-the-badge&logo=windows)](https://github.com/djenta/blendy/releases/latest)
+[![Download Blendy 2.0.1 for Windows](https://img.shields.io/badge/Download-Blendy%202.0.1%20for%20Windows-2ea44f?style=for-the-badge&logo=windows)](https://github.com/djenta/blendy/releases/latest)
 
 <p>
   <a href="docs/screenshots/blendy-promo-1.png"><img src="docs/screenshots/blendy-promo-1.png" alt="Blendy 2 project starting screen with readiness status and guided Blender prompts" width="100%"></a>
@@ -21,7 +21,7 @@ context, and does not execute model-written Blender Python.
 Download the Windows installer from the latest GitHub Release:
 
 ```text
-Blendy Local AI Tutor Setup 2.0.0.exe
+Blendy Local AI Tutor Setup 2.0.1.exe
 ```
 
 The 2.0 installer is not code-signed, so Windows SmartScreen may show an
@@ -48,7 +48,7 @@ http://localhost:1234/v1
 
 ## Install On Windows
 
-1. Download `Blendy Local AI Tutor Setup 2.0.0.exe`.
+1. Download `Blendy Local AI Tutor Setup 2.0.1.exe`.
 2. Run the installer.
 3. Open Blender.
 4. In the 3D View, press `N` to open the right sidebar.
