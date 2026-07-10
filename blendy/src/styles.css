@@ -125,13 +125,13 @@ button {
 
 .titlebar {
   -webkit-app-region: drag;
-  height: 70px;
-  flex: 0 0 70px;
+  height: 60px;
+  flex: 0 0 60px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 13px 10px 14px;
+  padding: 7px 10px 7px 12px;
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--shell-bg-strong) 76%, transparent);
 }
@@ -144,9 +144,9 @@ button {
 }
 
 .brand-logo {
-  width: 60px;
-  height: 50px;
-  flex: 0 0 60px;
+  width: 46px;
+  height: 40px;
+  flex: 0 0 46px;
   border-radius: 0;
   object-fit: contain;
   image-rendering: auto;
@@ -159,17 +159,18 @@ button {
 }
 
 .brand-name {
-  font-size: 0.98rem;
+  font-size: 0.94rem;
   font-weight: 660;
   line-height: 1.05;
   letter-spacing: 0;
+  white-space: nowrap;
 }
 
 .brand-subtitle {
-  margin-top: 3px;
+  margin-top: 2px;
   overflow: hidden;
   color: var(--muted);
-  font-size: 0.74rem;
+  font-size: 0.69rem;
   font-weight: 510;
   line-height: 1.1;
   text-overflow: ellipsis;
@@ -1303,14 +1304,14 @@ button:active:not(:disabled) {
 .drawer-close,
 .context-usage-button,
 .chat-history-button {
-  width: 40px;
-  height: 40px;
-  min-width: 40px;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
 }
 
 .titlebar {
-  height: 72px;
-  flex-basis: 72px;
+  height: 60px;
+  flex-basis: 60px;
   padding-right: 10px;
 }
 
@@ -1319,31 +1320,39 @@ button:active:not(:disabled) {
 }
 
 .readiness-panel {
-  position: relative;
-  z-index: 5;
-  flex: 0 0 auto;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--shell-bg-strong) 82%, transparent);
+  position: absolute;
+  top: 10px;
+  right: 110px;
+  z-index: 7;
+  display: flex;
+  align-items: flex-end;
+  border: 0;
+  background: transparent;
+}
+
+.readiness-panel.compact {
+  width: auto;
 }
 
 .readiness-summary-row {
   display: flex;
-  align-items: stretch;
-  min-height: 66px;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
 }
 
 .readiness-summary {
-  min-width: 0;
-  flex: 1;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
   display: grid;
-  grid-template-columns: 30px minmax(0, 1fr) 22px;
-  align-items: center;
-  gap: 9px;
-  border: 0;
-  padding: 10px 16px;
-  background: transparent;
+  grid-template-columns: 1fr;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  padding: 0;
+  background: color-mix(in srgb, var(--surface-strong) 94%, #808080 6%);
   color: var(--text);
-  text-align: left;
   cursor: pointer;
 }
 
@@ -1352,17 +1361,17 @@ button:active:not(:disabled) {
 }
 
 .readiness-mark {
-  width: 30px;
-  height: 30px;
+  width: 34px;
+  height: 34px;
   display: grid;
   place-items: center;
-  border-radius: 9px;
-  background: var(--accent-soft);
+  border-radius: 10px;
+  background: transparent;
   color: var(--accent);
 }
 
 .readiness-panel.needs-attention .readiness-mark {
-  background: color-mix(in srgb, #d78738 14%, var(--surface));
+  background: color-mix(in srgb, #d78738 11%, transparent);
   color: #9a571b;
 }
 
@@ -1370,33 +1379,25 @@ button:active:not(:disabled) {
   color: #ffbd72;
 }
 
-.readiness-copy {
-  min-width: 0;
+.readiness-chevron {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 15px;
+  height: 15px;
   display: grid;
-  gap: 2px;
-}
-
-.readiness-copy strong,
-.readiness-copy small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.readiness-copy strong {
-  font-size: 0.84rem;
-  font-weight: 720;
-}
-
-.readiness-copy small {
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface-strong);
   color: var(--muted);
-  font-size: 0.8rem;
-  line-height: 1.35;
 }
 
 .stop-generation {
-  min-width: 76px;
-  margin: 11px 13px 11px 0;
+  width: 62px;
+  min-width: 62px;
+  min-height: 36px;
+  margin: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1414,30 +1415,34 @@ button:active:not(:disabled) {
   color: #ff8d84;
 }
 
-.generation-progress {
-  height: 3px;
-  overflow: hidden;
-  background: var(--surface-soft);
-}
-
-.generation-progress-fill {
-  display: block;
-  width: 34%;
-  height: 100%;
-  background: var(--accent);
-  animation: generationSweep 1.65s ease-in-out infinite;
-}
-
-@keyframes generationSweep {
-  0% { transform: translateX(-105%); }
-  50% { transform: translateX(96%); }
-  100% { transform: translateX(305%); }
-}
-
 .readiness-details {
+  position: absolute;
+  top: 44px;
+  right: 0;
+  width: min(420px, calc(100vw - 28px));
   display: grid;
   gap: 8px;
-  padding: 0 16px 14px 55px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-strong);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.24);
+}
+
+.readiness-popover-head {
+  display: grid;
+  gap: 2px;
+  padding: 0 2px 5px;
+  border-bottom: 1px solid var(--border);
+}
+
+.readiness-popover-head strong {
+  font-size: 0.82rem;
+}
+
+.readiness-popover-head small {
+  color: var(--muted);
+  font-size: 0.72rem;
 }
 
 .readiness-line {
@@ -1642,61 +1647,30 @@ button:active:not(:disabled) {
   box-shadow: 0 -12px 28px color-mix(in srgb, var(--shell-bg) 72%, transparent);
 }
 
-.checkpoint-card {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+.checkpoint-actions {
+  display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--border);
-}
-
-.checkpoint-heading {
-  min-width: 0;
-  display: grid;
   gap: 3px;
 }
 
-.checkpoint-heading > span {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--accent);
-  font-size: 0.75rem;
-  font-weight: 760;
-}
-
-.checkpoint-heading p {
-  margin: 0;
-  color: var(--text);
-  font-size: 0.8rem;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
-.checkpoint-actions {
-  display: flex;
-  gap: 5px;
-}
-
 .checkpoint-actions button {
-  min-height: 40px;
+  min-height: 32px;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  border: 1px solid var(--border);
+  gap: 4px;
+  border: 0;
   border-radius: var(--radius-control);
-  padding: 0 9px;
-  background: var(--surface);
+  padding: 0 7px;
+  background: transparent;
   color: var(--muted);
-  font-size: 0.76rem;
+  font-size: 0.72rem;
   font-weight: 670;
   white-space: nowrap;
   cursor: pointer;
 }
 
 .checkpoint-actions button:hover:not(:disabled) {
-  border-color: var(--accent);
+  background: var(--accent-soft);
   color: var(--accent);
 }
 
@@ -1731,14 +1705,15 @@ button:active:not(:disabled) {
 
 .reference-tray {
   display: grid;
-  gap: 6px;
-  margin-bottom: 6px;
+  gap: 4px;
+  margin-bottom: 5px;
 }
 
 .reference-control-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 3px;
 }
 
 .reference-control-row > small {
@@ -1747,13 +1722,13 @@ button:active:not(:disabled) {
 }
 
 .attach-reference {
-  min-height: 40px;
+  min-height: 32px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
   border: 0;
   border-radius: var(--radius-control);
-  padding: 0 8px;
+  padding: 0 7px;
   background: transparent;
   color: var(--muted);
   font-size: 0.76rem;
@@ -1834,8 +1809,8 @@ button:active:not(:disabled) {
 }
 
 .floating-controls {
-  top: 78px;
-  right: 20px;
+  top: 10px;
+  right: 14px;
   bottom: auto;
 }
 
@@ -2062,14 +2037,8 @@ button:active:not(:disabled) {
 }
 
 @media (max-width: 860px) {
-  .checkpoint-card {
-    grid-template-columns: 1fr;
-    gap: 8px;
-  }
-
   .checkpoint-actions {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    display: flex;
   }
 
   .checkpoint-actions button {
@@ -2087,21 +2056,16 @@ button:active:not(:disabled) {
 
 @media (max-width: 620px) {
   .brand-logo {
-    width: 50px;
-    flex-basis: 50px;
+    width: 42px;
+    flex-basis: 42px;
   }
 
-  .brand-subtitle,
   .window-actions .icon-button:first-child {
     display: none;
   }
 
-  .readiness-copy small {
-    white-space: normal;
-  }
-
   .readiness-details {
-    padding-left: 16px;
+    width: min(360px, calc(100vw - 20px));
   }
 
   .readiness-line {
@@ -2114,14 +2078,14 @@ button:active:not(:disabled) {
 
   .checkpoint-actions button {
     justify-content: center;
-    min-height: 44px;
-    padding: 7px 9px;
-    font-size: 0.78rem;
-    white-space: normal;
+    min-height: 32px;
+    padding: 0 6px;
+    font-size: 0.72rem;
+    white-space: nowrap;
   }
 
   .checkpoint-actions {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    display: flex;
   }
 
   .reference-control-row > small {
@@ -2134,6 +2098,24 @@ button:active:not(:disabled) {
 
   .model-capabilities {
     justify-content: flex-start;
+  }
+}
+
+@media (max-width: 440px) {
+  .window-actions .window-control:not(.danger) {
+    display: none;
+  }
+
+  .brand {
+    gap: 7px;
+  }
+
+  .brand-name {
+    font-size: 0.82rem;
+  }
+
+  .brand-subtitle {
+    font-size: 0.62rem;
   }
 }
 

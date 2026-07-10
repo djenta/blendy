@@ -382,7 +382,14 @@ assert.strictEqual(regenerated.lastUser.content, "Latest question");
 assert.strictEqual(regenerationChat.messages.length, 3);
 assert(!JSON.stringify(regenerationChat).includes("Old answer that must not be fed back"));
 
-assert.strictEqual(sanitizeReferenceImages(["data:image/png;base64,c21hbGw="]).length, 1);
+assert.strictEqual(
+  sanitizeReferenceImages(["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="]).length,
+  1,
+);
+assert.throws(
+  () => sanitizeReferenceImages(["data:image/png;base64,c21hbGw="]),
+  /could not be decoded as a valid/,
+);
 assert.throws(() => sanitizeReferenceImages(["data:text/plain;base64,bm8="]), /PNG, JPEG, or WebP/);
 assert.strictEqual(isPrivateIp("127.0.0.1"), true);
 assert.strictEqual(isPrivateIp("192.168.1.5"), true);

@@ -5,7 +5,6 @@ import {
   ChevronDown,
   ChevronUp,
   CircleAlert,
-  Compass,
   Cpu,
   HelpCircle,
   Image as ImageIcon,
@@ -69,36 +68,22 @@ export function ReadinessPanel({
       : "General guidance mode";
 
   return (
-    <section className={`readiness-panel ${blenderConnected && modelReady ? "ready" : "needs-attention"}`} aria-label="Connection readiness">
+    <section className={`readiness-panel compact ${expanded ? "expanded" : ""} ${blenderConnected && modelReady ? "ready" : "needs-attention"}`} aria-label="Connection readiness">
       <div className="readiness-summary-row">
         <button
           type="button"
           className="readiness-summary"
           aria-expanded={expanded}
           onClick={() => setExpanded((current) => !current)}
+          title={isGenerating ? generationStage?.label || "Blendy is working" : headline}
         >
           <span className="readiness-mark" aria-hidden="true">
             {blenderConnected && modelReady ? <CheckCircle2 size={18} /> : <CircleAlert size={18} />}
           </span>
-          <span className="readiness-copy" aria-live={isGenerating ? "polite" : "off"}>
-            <strong>{isGenerating ? generationStage?.label || "Preparing your answer" : headline}</strong>
-            <small>
-              {isGenerating
-                ? canStop
-                  ? "The selected model is working. You can stop without losing your question."
-                  : "Blendy is preparing scene evidence. Stop becomes available when model generation begins."
-                : !modelStatus
-                  ? "This normally takes only a moment."
-                : !blenderConnected
-                  ? "Ask general questions now, or open Blender for scene-aware help."
-                  : !serverReachable
-                    ? "Blender is connected. LM Studio is the only missing piece."
-                    : !modelReady
-                      ? "LM Studio is reachable, but no chat model is loaded."
-                      : "Scene awareness and your loaded model are available."}
-            </small>
+          <span className="sr-only" aria-live={isGenerating ? "polite" : "off"}>
+            {isGenerating ? generationStage?.label || "Blendy is working" : headline}
           </span>
-          {!isGenerating && (expanded ? <ChevronUp size={17} /> : <ChevronDown size={17} />)}
+          {!isGenerating && <span className="readiness-chevron">{expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}</span>}
         </button>
         {isGenerating && canStop ? (
           <button
@@ -112,14 +97,12 @@ export function ReadinessPanel({
         ) : null}
       </div>
 
-      {isGenerating && (
-        <div className="generation-progress" aria-live="polite">
-          <span className="generation-progress-fill" />
-        </div>
-      )}
-
       {expanded && !isGenerating && (
         <div className="readiness-details">
+          <div className="readiness-popover-head">
+            <strong>{headline}</strong>
+            <small>Connection details</small>
+          </div>
           <ReadinessLine
             icon={<Wrench size={16} />}
             label="Blender"
@@ -204,57 +187,43 @@ export function SceneMismatchBanner({
 }
 
 export function CurrentCheckpoint({
-  content,
   disabled,
   onFollowUp,
 }: {
-  content: string;
   disabled: boolean;
   onFollowUp: (prompt: string) => void;
 }) {
-  const summary = checkpointSummary(content);
-  if (!summary) return null;
   return (
-    <section className="checkpoint-card" aria-label="Current checkpoint">
-      <div className="checkpoint-heading">
-        <span><Compass size={16} /> Current checkpoint</span>
-        <p>{summary}</p>
-      </div>
-      <div className="checkpoint-actions">
+      <div className="checkpoint-actions" aria-label="Follow-up shortcuts">
         <button
           type="button"
           disabled={disabled}
+          title="Check my work"
+          aria-label="Check my work"
           onClick={() => onFollowUp("Check my work against the last step. Capture fresh Blender evidence first, tell me what is correct, and give me only the next correction if one is needed.")}
         >
-          <CheckCircle2 size={15} /> Check my work
+          <CheckCircle2 size={14} /> Check
         </button>
         <button
           type="button"
           disabled={disabled}
+          title="I am stuck"
+          aria-label="I am stuck"
           onClick={() => onFollowUp("I am stuck on the last step. Use fresh Blender evidence, identify the most likely blocker, and give me one simple recovery action.")}
         >
-          <HelpCircle size={15} /> I am stuck
+          <HelpCircle size={14} /> Stuck
         </button>
         <button
           type="button"
           disabled={disabled}
+          title="Show me where"
+          aria-label="Show me where"
           onClick={() => onFollowUp("Show me exactly where the control for the last step is in Blender. Use fresh visual evidence and describe the clicks in plain location words without changing my scene.")}
         >
-          <MapPin size={15} /> Show me where
+          <MapPin size={14} /> Where
         </button>
       </div>
-    </section>
   );
-}
-
-function checkpointSummary(content: string) {
-  const paragraphs = content
-    .split(/\n+/)
-    .map((line) => line.replace(/^\s*(?:\d+[.)]|[-*])\s*/, "").trim())
-    .filter(Boolean);
-  const candidate = paragraphs.find((line) => /\b(select|open|click|press|set|change|add|move|scale|rotate|check|try|use|create|make)\b/i.test(line)) || paragraphs[0];
-  if (!candidate) return "";
-  return candidate.length > 190 ? `${candidate.slice(0, 187).trim()}...` : candidate;
 }
 
 export function ProjectNotebookEditor({
@@ -301,17 +270,17 @@ export function ProjectNotebookEditor({
 export function ReferenceAttachmentTray({
   images,
   error,
-  disabled,
   supportsVision,
   onChoose,
   onRemove,
+  actions,
 }: {
   images: ReferenceImage[];
   error: string;
-  disabled: boolean;
   supportsVision: boolean;
   onChoose: (files: FileList) => void;
   onRemove: (id: string) => void;
+  actions?: React.ReactNode;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   return (
@@ -333,13 +302,14 @@ export function ReferenceAttachmentTray({
         <button
           type="button"
           className="attach-reference"
-          disabled={disabled || !supportsVision || images.length >= 2}
+          disabled={!supportsVision || images.length >= 2}
           onClick={() => inputRef.current?.click()}
-          title={supportsVision ? "Attach up to two PNG, JPEG, or WebP reference images" : "Load a vision-capable model to attach images"}
+          title={supportsVision ? "Attach up to two desktop photos. Blendy prepares them for LM Studio." : "Load a vision-capable model to attach images"}
         >
           <Paperclip size={16} />
           <span>{images.length ? `${images.length} reference${images.length > 1 ? "s" : ""}` : "Add reference"}</span>
         </button>
+        {actions}
         {images.length > 0 && <small>Images go to the selected LM Studio model for this turn and are not saved in chat.</small>}
         {!supportsVision && <small>The loaded model cannot read images.</small>}
       </div>
@@ -347,7 +317,7 @@ export function ReferenceAttachmentTray({
         ref={inputRef}
         className="sr-only"
         type="file"
-        accept="image/png,image/jpeg,image/webp"
+        accept="image/*,.png,.jpg,.jpeg,.jfif,.webp,.bmp,.gif,.avif,.heic,.heif,.tif,.tiff"
         multiple
         tabIndex={-1}
         onChange={(event) => {
