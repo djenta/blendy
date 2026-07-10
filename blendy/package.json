@@ -1,6 +1,6 @@
 {
   "name": "blendy",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "private": true,
   "description": "Local AI Tutor for Blender.",
   "main": "electron/main.cjs",

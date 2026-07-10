@@ -15,6 +15,7 @@ import {
   Settings,
   SlidersHorizontal,
   Sparkles,
+  Square,
   Trash2,
   X,
 } from "lucide-react";
@@ -26,7 +27,6 @@ import {
   CurrentCheckpoint,
   EmptyStudioState,
   ProjectNotebookEditor,
-  ReadinessPanel,
   ReferenceAttachmentTray,
   SceneMismatchBanner,
   type ReferenceImage,
@@ -70,8 +70,8 @@ const CONTEXT_LIMIT_MAX_TOKENS = 256000;
 const CONTEXT_LIMIT_STEP_TOKENS = 1000;
 
 const themeLabels: Record<ThemeName, string> = {
-  solar: "Scholastic Solar",
-  sprint: "Neon Sprint",
+  solar: "Scholastic Solar (Light)",
+  sprint: "Neon Sprint (Dark)",
 };
 
 function loadSettings(): AppSettings {
@@ -638,16 +638,6 @@ function App() {
       .catch(() => undefined);
   }
 
-  async function refreshReadiness() {
-    if (!window.blendyApp) return;
-    const [statusResult, contextResult] = await Promise.allSettled([
-      window.blendyApp.getModelStatus?.(),
-      window.blendyApp.refreshContext({ chatId: activeChatId }),
-    ]);
-    if (statusResult.status === "fulfilled" && statusResult.value) setModelStatus(statusResult.value);
-    if (contextResult.status === "fulfilled") setContextSnapshot(contextResult.value);
-  }
-
   async function stopGeneration() {
     const messageId = activeGeneratedMessageIdRef.current;
     if (!messageId || !window.blendyApp?.cancelMessage) {
@@ -1127,6 +1117,137 @@ function App() {
     .reverse()
     .find((message) => message.role === "assistant" && message.status === "done" && message.content.trim());
 
+  const headerChatControls = (
+    <div className="header-chat-controls" ref={contextControlRef}>
+      {isGenerating && Boolean(activeGeneratedMessageIdRef.current) ? (
+        <button type="button" className="stop-generation" onClick={stopGeneration} title={generationStage?.label || "Stop generation"}>
+          <Square size={13} fill="currentColor" />
+          Stop
+        </button>
+      ) : null}
+      <div className="context-control">
+        <button
+          className="context-usage-button"
+          type="button"
+          onClick={() => {
+            setContextMenuOpen((open) => !open);
+            setChatMenuOpen(false);
+          }}
+          disabled={isGenerating || isManagingContext}
+          title={contextButtonLabel(contextSnapshot)}
+          aria-label={contextButtonLabel(contextSnapshot)}
+        >
+          <Info size={15} />
+        </button>
+        {contextMenuOpen && (
+          <div className="context-menu">
+            <div className="context-menu-meter">
+              <span>{formatTokens(contextSnapshot.contextTokens || 0)}</span>
+              <strong>{contextSnapshot.contextPercent || 0}%</strong>
+            </div>
+            <div className="context-menu-bar">
+              <span style={{ width: `${Math.min(100, contextSnapshot.contextPercent || 0)}%` }} />
+            </div>
+            <div className="context-menu-breakdown">
+              <div>
+                <span>Base context</span>
+                <strong>{formatTokens(contextSnapshot.baselineTokens || 0)}</strong>
+              </div>
+              <div>
+                <span>Conversation</span>
+                <strong>{formatTokens(contextSnapshot.conversationTokens || 0)}</strong>
+              </div>
+              <div>
+                <span>Tools</span>
+                <strong>{formatTokens((contextSnapshot.toolDefinitionTokens || 0) + (contextSnapshot.toolReserveTokens || 0))}</strong>
+              </div>
+              <div>
+                <span>Screenshot</span>
+                <strong>{formatTokens(contextSnapshot.imageReserveTokens || 0)}</strong>
+              </div>
+              <div>
+                <span>Remaining</span>
+                <strong>{formatTokens(Math.max(0, (contextSnapshot.contextLimitTokens || 0) - (contextSnapshot.contextTokens || 0)))}</strong>
+              </div>
+            </div>
+            <p className="context-menu-note">Compact shrinks conversation history. Tools and screenshot reserve are counted because the local model may need them inside the same answer.</p>
+            <button type="button" onClick={compactNow} disabled={isManagingContext}>
+              Compact now
+            </button>
+          </div>
+        )}
+      </div>
+      <div className="chat-history-control">
+        <button
+          className="chat-history-button"
+          type="button"
+          onClick={() => {
+            setChatMenuOpen((open) => !open);
+            setContextMenuOpen(false);
+          }}
+          disabled={isGenerating || isManagingContext}
+          title="Chat history"
+          aria-label="Chat history"
+        >
+          <Menu size={15} />
+        </button>
+        {chatMenuOpen && (
+          <div className="chat-history-menu">
+            <div className="chat-history-head">
+              <span>Chat history</span>
+              <button type="button" onClick={freshChat} disabled={isManagingContext}>
+                New
+              </button>
+            </div>
+            <div className="chat-history-list">
+              {chatSessions.map((session) => (
+                <div className={`chat-history-row ${session.id === activeChatId ? "active" : ""}`} key={session.id}>
+                  {editingChatId === session.id ? (
+                    <form
+                      className="chat-rename-form"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        commitRenameChat(session.id);
+                      }}
+                    >
+                      <input
+                        value={editingChatTitle}
+                        onChange={(event) => setEditingChatTitle(event.target.value)}
+                        autoFocus
+                      />
+                      <button type="submit" aria-label="Save chat name">
+                        <Check size={14} />
+                      </button>
+                    </form>
+                  ) : (
+                    <>
+                      <button className="chat-history-title" type="button" onClick={() => switchChat(session.id)}>
+                        <span>{session.title}</span>
+                        <small>{new Date(session.updatedAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</small>
+                      </button>
+                      <button className="chat-history-icon" type="button" onClick={() => beginRenameChat(session)} aria-label="Rename chat">
+                        <Pencil size={13} />
+                      </button>
+                      <button
+                        className={`chat-history-icon danger ${confirmingDeleteChatId === session.id ? "confirm" : ""}`}
+                        type="button"
+                        onClick={() => deleteChat(session.id)}
+                        aria-label={confirmingDeleteChatId === session.id ? "Confirm delete chat" : "Delete chat"}
+                        title={confirmingDeleteChatId === session.id ? "Click again to delete" : "Delete chat"}
+                      >
+                        {confirmingDeleteChatId === session.id ? <X size={13} /> : <Trash2 size={13} />}
+                      </button>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
   return (
     <div className="app-window">
       <header className="titlebar">
@@ -1147,6 +1268,7 @@ function App() {
               <PanelRight size={17} />
             </button>
           )}
+          {page === "chat" && headerChatControls}
           <button
             className="icon-button"
             type="button"
@@ -1178,15 +1300,6 @@ function App() {
       ) : (
         <main className={`chat-layout ${drawerOpen ? "drawer-open" : ""}`}>
           <section className="chat-page" aria-hidden={drawerOpen || undefined}>
-            <ReadinessPanel
-              context={contextSnapshot}
-              modelStatus={modelStatus}
-              isGenerating={isGenerating}
-              canStop={Boolean(activeGeneratedMessageIdRef.current)}
-              generationStage={generationStage}
-              onStop={stopGeneration}
-              onRefresh={refreshReadiness}
-            />
             <SceneMismatchBanner notebook={projectNotebook} onKeep={keepChatForCurrentScene} onNewChat={freshChat} />
             <div className="messages" ref={scrollRef} onScroll={handleScroll}>
               {messages.length === 0 ? (
@@ -1213,129 +1326,6 @@ function App() {
                 ))
               )}
             </div>
-            <div className="floating-controls" ref={contextControlRef}>
-              <div className="context-control">
-                <button
-                  className="context-usage-button"
-                  type="button"
-                  onClick={() => {
-                    setContextMenuOpen((open) => !open);
-                    setChatMenuOpen(false);
-                  }}
-                  disabled={isGenerating || isManagingContext}
-                  title={contextButtonLabel(contextSnapshot)}
-                  aria-label={contextButtonLabel(contextSnapshot)}
-                >
-                  <Info size={15} />
-                </button>
-                {contextMenuOpen && (
-                  <div className="context-menu">
-                    <div className="context-menu-meter">
-                      <span>{formatTokens(contextSnapshot.contextTokens || 0)}</span>
-                      <strong>{contextSnapshot.contextPercent || 0}%</strong>
-                    </div>
-                    <div className="context-menu-bar">
-                      <span style={{ width: `${Math.min(100, contextSnapshot.contextPercent || 0)}%` }} />
-                    </div>
-                    <div className="context-menu-breakdown">
-                      <div>
-                        <span>Base context</span>
-                        <strong>{formatTokens(contextSnapshot.baselineTokens || 0)}</strong>
-                      </div>
-                      <div>
-                        <span>Conversation</span>
-                        <strong>{formatTokens(contextSnapshot.conversationTokens || 0)}</strong>
-                      </div>
-                      <div>
-                        <span>Tools</span>
-                        <strong>{formatTokens((contextSnapshot.toolDefinitionTokens || 0) + (contextSnapshot.toolReserveTokens || 0))}</strong>
-                      </div>
-                      <div>
-                        <span>Screenshot</span>
-                        <strong>{formatTokens(contextSnapshot.imageReserveTokens || 0)}</strong>
-                      </div>
-                      <div>
-                        <span>Remaining</span>
-                        <strong>{formatTokens(Math.max(0, (contextSnapshot.contextLimitTokens || 0) - (contextSnapshot.contextTokens || 0)))}</strong>
-                      </div>
-                    </div>
-                    <p className="context-menu-note">Compact shrinks conversation history. Tools and screenshot reserve are counted because the local model may need them inside the same answer.</p>
-                    <button type="button" onClick={compactNow} disabled={isManagingContext}>
-                      Compact now
-                    </button>
-                  </div>
-                )}
-              </div>
-              <div className="chat-history-control">
-                <button
-                  className="chat-history-button"
-                  type="button"
-                  onClick={() => {
-                    setChatMenuOpen((open) => !open);
-                    setContextMenuOpen(false);
-                  }}
-                  disabled={isGenerating || isManagingContext}
-                  title="Chat history"
-                  aria-label="Chat history"
-                >
-                  <Menu size={15} />
-                </button>
-                {chatMenuOpen && (
-                  <div className="chat-history-menu">
-                    <div className="chat-history-head">
-                      <span>Chat history</span>
-                      <button type="button" onClick={freshChat} disabled={isManagingContext}>
-                        New
-                      </button>
-                    </div>
-                    <div className="chat-history-list">
-                      {chatSessions.map((session) => (
-                        <div className={`chat-history-row ${session.id === activeChatId ? "active" : ""}`} key={session.id}>
-                          {editingChatId === session.id ? (
-                            <form
-                              className="chat-rename-form"
-                              onSubmit={(event) => {
-                                event.preventDefault();
-                                commitRenameChat(session.id);
-                              }}
-                            >
-                              <input
-                                value={editingChatTitle}
-                                onChange={(event) => setEditingChatTitle(event.target.value)}
-                                autoFocus
-                              />
-                              <button type="submit" aria-label="Save chat name">
-                                <Check size={14} />
-                              </button>
-                            </form>
-                          ) : (
-                            <>
-                              <button className="chat-history-title" type="button" onClick={() => switchChat(session.id)}>
-                                <span>{session.title}</span>
-                                <small>{new Date(session.updatedAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</small>
-                              </button>
-                              <button className="chat-history-icon" type="button" onClick={() => beginRenameChat(session)} aria-label="Rename chat">
-                                <Pencil size={13} />
-                              </button>
-                              <button
-                                className={`chat-history-icon danger ${confirmingDeleteChatId === session.id ? "confirm" : ""}`}
-                                type="button"
-                                onClick={() => deleteChat(session.id)}
-                                aria-label={confirmingDeleteChatId === session.id ? "Confirm delete chat" : "Delete chat"}
-                                title={confirmingDeleteChatId === session.id ? "Click again to delete" : "Delete chat"}
-                              >
-                                {confirmingDeleteChatId === session.id ? <X size={13} /> : <Trash2 size={13} />}
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-
             <div className="coach-dock">
               {showJumpLatest && (
                 <button className="jump-latest" type="button" onClick={jumpToLatest}>
