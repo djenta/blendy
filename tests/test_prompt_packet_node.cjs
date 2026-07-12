@@ -140,7 +140,12 @@ const bridgedPayload = buildChatPayload({
 assert(!bridgedPayload.messages[0].content.includes("PYTHON SYSTEM PROMPT"));
 assert(bridgedPayload.messages[0].content.includes("You are Blendy"));
 assert(bridgedPayload.messages[0].content.includes("untrusted data evidence"));
+assert(bridgedPayload.messages[0].content.includes("visually interpret that viewport before reading object names"));
+assert(bridgedPayload.messages[0].content.includes("Do not require the user to select the object, add a marker"));
+assert(bridgedPayload.messages[0].content.includes("An object named Sphere may visibly be a flattened dome"));
 assert(!bridgedPayload.messages.at(-1).content.includes("Bridge-built context"));
+assert(bridgedPayload.messages.at(-1).content.includes("VIEWPORT-FIRST GROUNDING"));
+assert(bridgedPayload.messages.at(-1).content.includes("SECONDARY STRUCTURED BLENDER FACTS"));
 assert(bridgedPayload.messages.at(-1).content.includes("TOOL USE"));
 assert(bridgedPayload.messages.at(-1).content.includes("USER INSTRUCTIONS"));
 assert(bridgedPayload.messages.at(-1).content.includes("I am a beginner"));
@@ -170,6 +175,37 @@ assert(Array.isArray(multimodalPayload.messages.at(-1).content));
 assert.strictEqual(multimodalPayload.messages.at(-1).content[0].type, "image_url");
 assert.strictEqual(multimodalPayload.messages.at(-1).content.at(-1).type, "text");
 assert(!multimodalPayload.tools.some((tool) => ["web_search", "fetch_url"].includes(tool.function.name)));
+
+const viewportFirstPayload = buildChatPayload({
+  prompt: "I am trying to get this button to sit neatly on this flashlight",
+  context: {
+    promptParts: { scene_context: "Active object: Sphere" },
+    visualEvidence: [
+      { kind: "overview", dataUrl: "data:image/png;base64,b3ZlcnZpZXc=" },
+      { kind: "active_editor", dataUrl: "data:image/png;base64,Zm9jdXNlZA==" },
+    ],
+  },
+  chat: { compactedSummary: "", projectNotebook: "", messages: [] },
+  settings: { model: "gemma-test", responseMaxTokens: 2200, toolUse: "AUTO", knowledgeMode: "LOCAL_ONLY" },
+});
+assert.strictEqual(
+  viewportFirstPayload.messages.at(-1).content[0].image_url.url,
+  "data:image/png;base64,Zm9jdXNlZA==",
+  "The focused 3D viewport must be the first image the model sees.",
+);
+assert(viewportFirstPayload.messages.at(-1).content.at(-1).text.includes("Resolve obvious references like 'this button on this flashlight'"));
+
+const correctionPayload = buildChatPayload({
+  prompt: "I said the circular button this whole time",
+  context: { promptParts: {}, visualEvidence: [{ kind: "active_editor", dataUrl: "data:image/png;base64,Zm9jdXNlZA==" }] },
+  chat: {
+    compactedSummary: "",
+    projectNotebook: "",
+    messages: [{ role: "assistant", content: "Make a square inset." }],
+  },
+  settings: { model: "gemma-test", responseMaxTokens: 2200, toolUse: "AUTO", knowledgeMode: "LOCAL_ONLY" },
+});
+assert(correctionPayload.messages.at(-1).content.at(-1).text.includes("Treat the earlier assistant plan as rejected"));
 
 const nativePromptPayload = buildChatPayload({
   prompt: "How do I make this look like a blood splash?",

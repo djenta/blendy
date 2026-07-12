@@ -1,162 +1,21 @@
 import {
   BookOpen,
-  Camera,
   CheckCircle2,
-  ChevronDown,
-  ChevronUp,
   CircleAlert,
-  Cpu,
   HelpCircle,
   Image as ImageIcon,
   MapPin,
   Paperclip,
   Save,
-  Square,
-  Wrench,
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { ContextSnapshot, ModelStatus, ProjectNotebook } from "./types";
+import type { ProjectNotebook } from "./types";
 
 export interface ReferenceImage {
   id: string;
   name: string;
   dataUrl: string;
-}
-
-interface ReadinessPanelProps {
-  context: ContextSnapshot;
-  modelStatus?: ModelStatus;
-  isGenerating: boolean;
-  canStop: boolean;
-  generationStage?: { stage: string; label: string };
-  onStop: () => void;
-  onRefresh: () => void;
-}
-
-function statusText(value: boolean | undefined, ready: string, missing: string, checking: string) {
-  if (value === true) return ready;
-  if (value === false) return missing;
-  return checking;
-}
-
-export function ReadinessPanel({
-  context,
-  modelStatus,
-  isGenerating,
-  canStop,
-  generationStage,
-  onStop,
-  onRefresh,
-}: ReadinessPanelProps) {
-  const [expanded, setExpanded] = useState(false);
-  const blenderConnected = context.bridgeOk === true;
-  const serverReachable = modelStatus?.reachable === true;
-  const modelReady = serverReachable
-    && Boolean(modelStatus?.modelId)
-    && modelStatus?.loaded !== false
-    && modelStatus?.chatCapable !== false;
-  const modelName = modelStatus?.displayName || modelStatus?.modelId || "Local model";
-  const headline = !modelStatus
-    ? "Checking your local setup"
-    : blenderConnected && modelReady
-    ? `${modelName} is ready with Blender`
-    : !serverReachable
-      ? "Start LM Studio when you are ready to chat"
-      : !modelReady
-        ? "Load a chat model in LM Studio"
-      : "General guidance mode";
-
-  return (
-    <section className={`readiness-panel compact ${expanded ? "expanded" : ""} ${blenderConnected && modelReady ? "ready" : "needs-attention"}`} aria-label="Connection readiness">
-      <div className="readiness-summary-row">
-        <button
-          type="button"
-          className="readiness-summary"
-          aria-expanded={expanded}
-          onClick={() => setExpanded((current) => !current)}
-          title={isGenerating ? generationStage?.label || "Blendy is working" : headline}
-        >
-          <span className="readiness-mark" aria-hidden="true">
-            {blenderConnected && modelReady ? <CheckCircle2 size={18} /> : <CircleAlert size={18} />}
-          </span>
-          <span className="sr-only" aria-live={isGenerating ? "polite" : "off"}>
-            {isGenerating ? generationStage?.label || "Blendy is working" : headline}
-          </span>
-          {!isGenerating && <span className="readiness-chevron">{expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}</span>}
-        </button>
-        {isGenerating && canStop ? (
-          <button
-            type="button"
-            className="stop-generation"
-            onClick={onStop}
-          >
-            <Square size={13} fill="currentColor" />
-            Stop
-          </button>
-        ) : null}
-      </div>
-
-      {expanded && !isGenerating && (
-        <div className="readiness-details">
-          <div className="readiness-popover-head">
-            <strong>{headline}</strong>
-            <small>Connection details</small>
-          </div>
-          <ReadinessLine
-            icon={<Wrench size={16} />}
-            label="Blender"
-            value={statusText(context.bridgeOk, "Connected", "Not connected", "Checking")}
-            help={blenderConnected ? context.blenderVersion || "Scene data is available" : "Open Blender. Blendy can still give general guidance without it."}
-            ok={blenderConnected}
-          />
-          <ReadinessLine
-            icon={<Cpu size={16} />}
-            label="LM Studio"
-            value={statusText(modelStatus?.reachable, "Reachable", "Not running", "Checking")}
-            help={serverReachable
-              ? modelReady
-                ? `${modelName} is loaded and chat-capable.`
-                : "LM Studio is open. Load a chat model, then check again."
-              : modelStatus?.error || "Open LM Studio, load your Gemma model, then refresh."}
-            ok={modelReady}
-          />
-          <div className="capability-row" aria-label="Selected model capabilities">
-            <span className={modelStatus?.vision ? "available" : "unavailable"}><Camera size={14} /> Vision</span>
-            <span className={modelStatus?.toolUse ? "available" : "unavailable"}><Wrench size={14} /> Tools</span>
-            <span className={modelStatus?.chatCapable !== false ? "available" : "unavailable"}><BookOpen size={14} /> Chat</span>
-          </div>
-          <button type="button" className="secondary-button readiness-refresh" onClick={onRefresh}>Check again</button>
-        </div>
-      )}
-    </section>
-  );
-}
-
-function ReadinessLine({
-  icon,
-  label,
-  value,
-  help,
-  ok,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  help: string;
-  ok: boolean;
-}) {
-  return (
-    <div className="readiness-line">
-      <span className="readiness-line-icon">{icon}</span>
-      <span>
-        <small>{label}</small>
-        <strong>{value}</strong>
-      </span>
-      <p>{help}</p>
-      <span className={`semantic-status ${ok ? "ok" : "waiting"}`} aria-label={ok ? "Ready" : "Needs attention"} />
-    </div>
-  );
 }
 
 export function SceneMismatchBanner({

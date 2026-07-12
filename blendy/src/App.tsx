@@ -15,6 +15,7 @@ import {
   Settings,
   SlidersHorizontal,
   Sparkles,
+  Square,
   Trash2,
   X,
 } from "lucide-react";
@@ -26,7 +27,6 @@ import {
   CurrentCheckpoint,
   EmptyStudioState,
   ProjectNotebookEditor,
-  ReadinessPanel,
   ReferenceAttachmentTray,
   SceneMismatchBanner,
   type ReferenceImage,
@@ -43,6 +43,8 @@ import type {
   ModelStatus,
   PageName,
   ProjectNotebook,
+  ThemeColorRole,
+  ThemeColors,
   ThemeName,
   ToolUseMode,
 } from "./types";
@@ -52,6 +54,7 @@ const SETTINGS_KEY = "blendy.prototype.settings";
 const defaultSettings: AppSettings = {
   theme: "solar",
   textSize: 15,
+  colorOverrides: {},
 };
 
 const defaultBackendSettings: BackendSettings = {
@@ -70,9 +73,68 @@ const CONTEXT_LIMIT_MAX_TOKENS = 256000;
 const CONTEXT_LIMIT_STEP_TOKENS = 1000;
 
 const themeLabels: Record<ThemeName, string> = {
-  solar: "Scholastic Solar",
-  sprint: "Neon Sprint",
+  solar: "Scholastic Solar (Light)",
+  sprint: "Neon Sprint (Dark)",
 };
+
+const themeColorDefaults: Record<ThemeName, ThemeColors> = {
+  solar: {
+    background: "#f4efe3",
+    panel: "#fffaf0",
+    text: "#1d2927",
+    inputBorder: "#9b5c16",
+    button: "#9b5c16",
+    highlight: "#14796f",
+    assistantBar: "#9b5c16",
+  },
+  sprint: {
+    background: "#0d0e16",
+    panel: "#202234",
+    text: "#f1f0ff",
+    inputBorder: "#e267ff",
+    button: "#e267ff",
+    highlight: "#38e7df",
+    assistantBar: "#e267ff",
+  },
+};
+
+const themeColorControls: Array<{ role: ThemeColorRole; label: string; description: string }> = [
+  { role: "background", label: "Background", description: "Main app canvas" },
+  { role: "panel", label: "Panels", description: "Cards and title bar" },
+  { role: "text", label: "Text", description: "Readable app copy" },
+  { role: "inputBorder", label: "Text box border", description: "Message and settings fields" },
+  { role: "button", label: "Buttons", description: "Send and primary actions" },
+  { role: "highlight", label: "Highlights", description: "Focus rings and Blender details" },
+  { role: "assistantBar", label: "Blendy message bar", description: "Vertical guide beside replies" },
+];
+
+function isHexColor(value: unknown): value is string {
+  return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value);
+}
+
+function loadColorOverrides(value: unknown): AppSettings["colorOverrides"] {
+  if (!value || typeof value !== "object") return {};
+  const saved = value as Record<string, unknown>;
+  const overrides: AppSettings["colorOverrides"] = {};
+  for (const theme of ["solar", "sprint"] as ThemeName[]) {
+    const candidate = saved[theme];
+    if (!candidate || typeof candidate !== "object") continue;
+    const colors: Partial<ThemeColors> = {};
+    for (const { role } of themeColorControls) {
+      const color = (candidate as Record<string, unknown>)[role];
+      if (isHexColor(color)) colors[role] = color;
+    }
+    if (Object.keys(colors).length) overrides[theme] = colors;
+  }
+  return overrides;
+}
+
+function resolvedThemeColors(settings: AppSettings): ThemeColors {
+  return {
+    ...themeColorDefaults[settings.theme],
+    ...settings.colorOverrides[settings.theme],
+  };
+}
 
 function loadSettings(): AppSettings {
   try {
@@ -83,11 +145,13 @@ function loadSettings(): AppSettings {
     const saved = JSON.parse(raw) as {
       theme?: ThemeName;
       textSize?: number;
+      colorOverrides?: unknown;
     };
     return {
       ...defaultSettings,
-      theme: saved.theme || defaultSettings.theme,
-      textSize: saved.textSize || defaultSettings.textSize,
+      theme: saved.theme === "sprint" ? "sprint" : "solar",
+      textSize: Number.isFinite(saved.textSize) ? Number(saved.textSize) : defaultSettings.textSize,
+      colorOverrides: loadColorOverrides(saved.colorOverrides),
     };
   } catch (_error) {
     return defaultSettings;
@@ -286,9 +350,18 @@ function App() {
 
   useEffect(() => {
     const themeFont = settings.theme === "sprint" ? "fraktion" : "geist";
-    document.documentElement.dataset.theme = settings.theme;
-    document.documentElement.dataset.font = themeFont;
-    document.documentElement.style.setProperty("--app-font-size", `${settings.textSize}px`);
+    const root = document.documentElement;
+    const colors = resolvedThemeColors(settings);
+    root.dataset.theme = settings.theme;
+    root.dataset.font = themeFont;
+    root.style.setProperty("--app-font-size", `${settings.textSize}px`);
+    root.style.setProperty("--theme-background", colors.background);
+    root.style.setProperty("--theme-panel", colors.panel);
+    root.style.setProperty("--theme-text", colors.text);
+    root.style.setProperty("--theme-input-border", colors.inputBorder);
+    root.style.setProperty("--theme-button", colors.button);
+    root.style.setProperty("--theme-highlight", colors.highlight);
+    root.style.setProperty("--theme-assistant-bar", colors.assistantBar);
     window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
   }, [settings]);
 
@@ -636,16 +709,6 @@ function App() {
         applyDiagnostics(state.diagnostics);
       })
       .catch(() => undefined);
-  }
-
-  async function refreshReadiness() {
-    if (!window.blendyApp) return;
-    const [statusResult, contextResult] = await Promise.allSettled([
-      window.blendyApp.getModelStatus?.(),
-      window.blendyApp.refreshContext({ chatId: activeChatId }),
-    ]);
-    if (statusResult.status === "fulfilled" && statusResult.value) setModelStatus(statusResult.value);
-    if (contextResult.status === "fulfilled") setContextSnapshot(contextResult.value);
   }
 
   async function stopGeneration() {
@@ -1127,6 +1190,137 @@ function App() {
     .reverse()
     .find((message) => message.role === "assistant" && message.status === "done" && message.content.trim());
 
+  const headerChatControls = (
+    <div className="header-chat-controls" ref={contextControlRef}>
+      {isGenerating && Boolean(activeGeneratedMessageIdRef.current) ? (
+        <button type="button" className="stop-generation" onClick={stopGeneration} title={generationStage?.label || "Stop generation"}>
+          <Square size={13} fill="currentColor" />
+          Stop
+        </button>
+      ) : null}
+      <div className="context-control">
+        <button
+          className="context-usage-button"
+          type="button"
+          onClick={() => {
+            setContextMenuOpen((open) => !open);
+            setChatMenuOpen(false);
+          }}
+          disabled={isGenerating || isManagingContext}
+          title={contextButtonLabel(contextSnapshot)}
+          aria-label={contextButtonLabel(contextSnapshot)}
+        >
+          <Info size={15} />
+        </button>
+        {contextMenuOpen && (
+          <div className="context-menu">
+            <div className="context-menu-meter">
+              <span>{formatTokens(contextSnapshot.contextTokens || 0)}</span>
+              <strong>{contextSnapshot.contextPercent || 0}%</strong>
+            </div>
+            <div className="context-menu-bar">
+              <span style={{ width: `${Math.min(100, contextSnapshot.contextPercent || 0)}%` }} />
+            </div>
+            <div className="context-menu-breakdown">
+              <div>
+                <span>Base context</span>
+                <strong>{formatTokens(contextSnapshot.baselineTokens || 0)}</strong>
+              </div>
+              <div>
+                <span>Conversation</span>
+                <strong>{formatTokens(contextSnapshot.conversationTokens || 0)}</strong>
+              </div>
+              <div>
+                <span>Tools</span>
+                <strong>{formatTokens((contextSnapshot.toolDefinitionTokens || 0) + (contextSnapshot.toolReserveTokens || 0))}</strong>
+              </div>
+              <div>
+                <span>Screenshot</span>
+                <strong>{formatTokens(contextSnapshot.imageReserveTokens || 0)}</strong>
+              </div>
+              <div>
+                <span>Remaining</span>
+                <strong>{formatTokens(Math.max(0, (contextSnapshot.contextLimitTokens || 0) - (contextSnapshot.contextTokens || 0)))}</strong>
+              </div>
+            </div>
+            <p className="context-menu-note">Compact shrinks conversation history. Tools and screenshot reserve are counted because the local model may need them inside the same answer.</p>
+            <button type="button" onClick={compactNow} disabled={isManagingContext}>
+              Compact now
+            </button>
+          </div>
+        )}
+      </div>
+      <div className="chat-history-control">
+        <button
+          className="chat-history-button"
+          type="button"
+          onClick={() => {
+            setChatMenuOpen((open) => !open);
+            setContextMenuOpen(false);
+          }}
+          disabled={isGenerating || isManagingContext}
+          title="Chat history"
+          aria-label="Chat history"
+        >
+          <Menu size={15} />
+        </button>
+        {chatMenuOpen && (
+          <div className="chat-history-menu">
+            <div className="chat-history-head">
+              <span>Chat history</span>
+              <button type="button" onClick={freshChat} disabled={isManagingContext}>
+                New
+              </button>
+            </div>
+            <div className="chat-history-list">
+              {chatSessions.map((session) => (
+                <div className={`chat-history-row ${session.id === activeChatId ? "active" : ""}`} key={session.id}>
+                  {editingChatId === session.id ? (
+                    <form
+                      className="chat-rename-form"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        commitRenameChat(session.id);
+                      }}
+                    >
+                      <input
+                        value={editingChatTitle}
+                        onChange={(event) => setEditingChatTitle(event.target.value)}
+                        autoFocus
+                      />
+                      <button type="submit" aria-label="Save chat name">
+                        <Check size={14} />
+                      </button>
+                    </form>
+                  ) : (
+                    <>
+                      <button className="chat-history-title" type="button" onClick={() => switchChat(session.id)}>
+                        <span>{session.title}</span>
+                        <small>{new Date(session.updatedAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</small>
+                      </button>
+                      <button className="chat-history-icon" type="button" onClick={() => beginRenameChat(session)} aria-label="Rename chat">
+                        <Pencil size={13} />
+                      </button>
+                      <button
+                        className={`chat-history-icon danger ${confirmingDeleteChatId === session.id ? "confirm" : ""}`}
+                        type="button"
+                        onClick={() => deleteChat(session.id)}
+                        aria-label={confirmingDeleteChatId === session.id ? "Confirm delete chat" : "Delete chat"}
+                        title={confirmingDeleteChatId === session.id ? "Click again to delete" : "Delete chat"}
+                      >
+                        {confirmingDeleteChatId === session.id ? <X size={13} /> : <Trash2 size={13} />}
+                      </button>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
   return (
     <div className="app-window">
       <header className="titlebar">
@@ -1147,6 +1341,7 @@ function App() {
               <PanelRight size={17} />
             </button>
           )}
+          {page === "chat" && headerChatControls}
           <button
             className="icon-button"
             type="button"
@@ -1178,15 +1373,6 @@ function App() {
       ) : (
         <main className={`chat-layout ${drawerOpen ? "drawer-open" : ""}`}>
           <section className="chat-page" aria-hidden={drawerOpen || undefined}>
-            <ReadinessPanel
-              context={contextSnapshot}
-              modelStatus={modelStatus}
-              isGenerating={isGenerating}
-              canStop={Boolean(activeGeneratedMessageIdRef.current)}
-              generationStage={generationStage}
-              onStop={stopGeneration}
-              onRefresh={refreshReadiness}
-            />
             <SceneMismatchBanner notebook={projectNotebook} onKeep={keepChatForCurrentScene} onNewChat={freshChat} />
             <div className="messages" ref={scrollRef} onScroll={handleScroll}>
               {messages.length === 0 ? (
@@ -1213,129 +1399,6 @@ function App() {
                 ))
               )}
             </div>
-            <div className="floating-controls" ref={contextControlRef}>
-              <div className="context-control">
-                <button
-                  className="context-usage-button"
-                  type="button"
-                  onClick={() => {
-                    setContextMenuOpen((open) => !open);
-                    setChatMenuOpen(false);
-                  }}
-                  disabled={isGenerating || isManagingContext}
-                  title={contextButtonLabel(contextSnapshot)}
-                  aria-label={contextButtonLabel(contextSnapshot)}
-                >
-                  <Info size={15} />
-                </button>
-                {contextMenuOpen && (
-                  <div className="context-menu">
-                    <div className="context-menu-meter">
-                      <span>{formatTokens(contextSnapshot.contextTokens || 0)}</span>
-                      <strong>{contextSnapshot.contextPercent || 0}%</strong>
-                    </div>
-                    <div className="context-menu-bar">
-                      <span style={{ width: `${Math.min(100, contextSnapshot.contextPercent || 0)}%` }} />
-                    </div>
-                    <div className="context-menu-breakdown">
-                      <div>
-                        <span>Base context</span>
-                        <strong>{formatTokens(contextSnapshot.baselineTokens || 0)}</strong>
-                      </div>
-                      <div>
-                        <span>Conversation</span>
-                        <strong>{formatTokens(contextSnapshot.conversationTokens || 0)}</strong>
-                      </div>
-                      <div>
-                        <span>Tools</span>
-                        <strong>{formatTokens((contextSnapshot.toolDefinitionTokens || 0) + (contextSnapshot.toolReserveTokens || 0))}</strong>
-                      </div>
-                      <div>
-                        <span>Screenshot</span>
-                        <strong>{formatTokens(contextSnapshot.imageReserveTokens || 0)}</strong>
-                      </div>
-                      <div>
-                        <span>Remaining</span>
-                        <strong>{formatTokens(Math.max(0, (contextSnapshot.contextLimitTokens || 0) - (contextSnapshot.contextTokens || 0)))}</strong>
-                      </div>
-                    </div>
-                    <p className="context-menu-note">Compact shrinks conversation history. Tools and screenshot reserve are counted because the local model may need them inside the same answer.</p>
-                    <button type="button" onClick={compactNow} disabled={isManagingContext}>
-                      Compact now
-                    </button>
-                  </div>
-                )}
-              </div>
-              <div className="chat-history-control">
-                <button
-                  className="chat-history-button"
-                  type="button"
-                  onClick={() => {
-                    setChatMenuOpen((open) => !open);
-                    setContextMenuOpen(false);
-                  }}
-                  disabled={isGenerating || isManagingContext}
-                  title="Chat history"
-                  aria-label="Chat history"
-                >
-                  <Menu size={15} />
-                </button>
-                {chatMenuOpen && (
-                  <div className="chat-history-menu">
-                    <div className="chat-history-head">
-                      <span>Chat history</span>
-                      <button type="button" onClick={freshChat} disabled={isManagingContext}>
-                        New
-                      </button>
-                    </div>
-                    <div className="chat-history-list">
-                      {chatSessions.map((session) => (
-                        <div className={`chat-history-row ${session.id === activeChatId ? "active" : ""}`} key={session.id}>
-                          {editingChatId === session.id ? (
-                            <form
-                              className="chat-rename-form"
-                              onSubmit={(event) => {
-                                event.preventDefault();
-                                commitRenameChat(session.id);
-                              }}
-                            >
-                              <input
-                                value={editingChatTitle}
-                                onChange={(event) => setEditingChatTitle(event.target.value)}
-                                autoFocus
-                              />
-                              <button type="submit" aria-label="Save chat name">
-                                <Check size={14} />
-                              </button>
-                            </form>
-                          ) : (
-                            <>
-                              <button className="chat-history-title" type="button" onClick={() => switchChat(session.id)}>
-                                <span>{session.title}</span>
-                                <small>{new Date(session.updatedAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</small>
-                              </button>
-                              <button className="chat-history-icon" type="button" onClick={() => beginRenameChat(session)} aria-label="Rename chat">
-                                <Pencil size={13} />
-                              </button>
-                              <button
-                                className={`chat-history-icon danger ${confirmingDeleteChatId === session.id ? "confirm" : ""}`}
-                                type="button"
-                                onClick={() => deleteChat(session.id)}
-                                aria-label={confirmingDeleteChatId === session.id ? "Confirm delete chat" : "Delete chat"}
-                                title={confirmingDeleteChatId === session.id ? "Click again to delete" : "Delete chat"}
-                              >
-                                {confirmingDeleteChatId === session.id ? <X size={13} /> : <Trash2 size={13} />}
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-
             <div className="coach-dock">
               {showJumpLatest && (
                 <button className="jump-latest" type="button" onClick={jumpToLatest}>
@@ -1817,6 +1880,27 @@ function SettingsPage({
   chatPath: string;
   onOpenPromptPacket: () => void;
 }) {
+  const colors = resolvedThemeColors(settings);
+  const hasThemeOverrides = Boolean(Object.keys(settings.colorOverrides[settings.theme] || {}).length);
+
+  function updateThemeColor(role: ThemeColorRole, color: string) {
+    updateSettings({
+      colorOverrides: {
+        ...settings.colorOverrides,
+        [settings.theme]: {
+          ...settings.colorOverrides[settings.theme],
+          [role]: color,
+        },
+      },
+    });
+  }
+
+  function restoreThemeColors() {
+    const colorOverrides = { ...settings.colorOverrides };
+    delete colorOverrides[settings.theme];
+    updateSettings({ colorOverrides });
+  }
+
   return (
     <main className="settings-page">
       <section className="settings-hero">
@@ -1835,6 +1919,13 @@ function SettingsPage({
             ["sprint", themeLabels.sprint],
           ]}
           onChange={(theme) => updateSettings({ theme: theme as ThemeName })}
+        />
+        <ColorStudio
+          theme={settings.theme}
+          colors={colors}
+          hasOverrides={hasThemeOverrides}
+          onChange={updateThemeColor}
+          onRestore={restoreThemeColors}
         />
         <label className="range-setting">
           <span>Text size</span>
@@ -2010,6 +2101,52 @@ function SettingsGroup({ title, children }: { title: string; children: React.Rea
     <section className="settings-group">
       <h2>{title}</h2>
       {children}
+    </section>
+  );
+}
+
+function ColorStudio({
+  theme,
+  colors,
+  hasOverrides,
+  onChange,
+  onRestore,
+}: {
+  theme: ThemeName;
+  colors: ThemeColors;
+  hasOverrides: boolean;
+  onChange: (role: ThemeColorRole, color: string) => void;
+  onRestore: () => void;
+}) {
+  return (
+    <section className="color-studio" aria-label={`${themeLabels[theme]} color studio`}>
+      <div className="color-studio-head">
+        <div>
+          <h3>Color studio</h3>
+          <p>Click any swatch to choose exactly what that part of the theme looks like. Changes appear right away and stay saved on this computer.</p>
+        </div>
+        <button type="button" className="color-studio-restore" onClick={onRestore} disabled={!hasOverrides}>
+          Restore {theme === "sprint" ? "Neon Sprint" : "Scholastic Solar"}
+        </button>
+      </div>
+      <div className="color-studio-grid">
+        {themeColorControls.map(({ role, label, description }) => (
+          <label className="color-swatch-control" key={role}>
+            <input
+              type="color"
+              value={colors[role]}
+              onChange={(event) => onChange(role, event.target.value)}
+              aria-label={`${label} color`}
+            />
+            <span className="color-swatch" style={{ backgroundColor: colors[role] }} aria-hidden="true" />
+            <span className="color-swatch-copy">
+              <strong>{label}</strong>
+              <small>{description}</small>
+            </span>
+            <code>{colors[role].toUpperCase()}</code>
+          </label>
+        ))}
+      </div>
     </section>
   );
 }

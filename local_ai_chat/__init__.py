@@ -125,9 +125,16 @@ def _bounded_visual_evidence(
     evidence: list[dict[str, str]],
     max_bytes: int = BLENDY_BRIDGE_MAX_IMAGE_BYTES,
 ) -> tuple[list[dict[str, str]], int]:
-    """Prefer the overview and drop later images until encoded payload fits."""
+    """Prefer the focused editor view and drop lower-value images first."""
 
-    kept = list(evidence)
+    priorities = {"active_editor": 0, "active-editor": 0, "overview": 1}
+    kept = [
+        item
+        for _index, item in sorted(
+            enumerate(evidence),
+            key=lambda pair: (priorities.get(str(pair[1].get("kind", "")), 2), pair[0]),
+        )
+    ]
     omitted = 0
     while kept and sum(len(str(item.get("dataUrl", "")).encode("utf-8")) for item in kept) > max_bytes:
         kept.pop()
@@ -1788,9 +1795,16 @@ if bpy is not None:
 
     def _bridge_context_line(context: Any, screenshot: bool) -> str:
         active = context.active_object
+        if active:
+            try:
+                object_status = f"{active.name} selected" if active.select_get() else f"{active.name} active (not selected)"
+            except Exception:
+                object_status = f"{active.name} active"
+        else:
+            object_status = "No active object"
         facts = [
             _scene_unit_label(context.scene),
-            f"{active.name} selected" if active else "No object selected",
+            object_status,
             context.mode.replace("_", " ").title(),
         ]
         bevel = _active_bevel_context(active)
@@ -1930,7 +1944,7 @@ if bpy is not None:
             "visual": visual,
             "used": {
                 "screenshot": bool(visual_evidence),
-                "screenshotOverview": bool(visual_evidence and visual_evidence[0]["kind"] == "overview"),
+            "screenshotOverview": any(item["kind"] == "overview" for item in visual_evidence),
                 "activeEditorScreenshot": any(item["kind"] == "active_editor" for item in visual_evidence),
                 "screenshotReason": request["screenshot"],
                 "contextTier": tier,

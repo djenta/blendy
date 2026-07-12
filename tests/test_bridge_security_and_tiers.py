@@ -52,13 +52,13 @@ class BridgeSecurityTests(unittest.TestCase):
         with self.assertRaises(OverflowError):
             _validated_bridge_content_length(str(BLENDY_BRIDGE_MAX_REQUEST_BYTES + 1))
 
-    def test_visual_evidence_drops_focused_capture_before_overview(self) -> None:
+    def test_visual_evidence_keeps_focused_capture_before_overview(self) -> None:
         evidence = [
             {"kind": "overview", "dataUrl": "a" * 8},
             {"kind": "active_editor", "dataUrl": "b" * 8},
         ]
         kept, omitted = _bounded_visual_evidence(evidence, max_bytes=10)
-        self.assertEqual([item["kind"] for item in kept], ["overview"])
+        self.assertEqual([item["kind"] for item in kept], ["active_editor"])
         self.assertEqual(omitted, 1)
 
 

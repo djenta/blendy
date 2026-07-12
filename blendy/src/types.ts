@@ -1,4 +1,6 @@
 export type ThemeName = "solar" | "sprint";
+export type ThemeColorRole = "background" | "panel" | "text" | "inputBorder" | "button" | "highlight" | "assistantBar";
+export type ThemeColors = Record<ThemeColorRole, string>;
 export type PageName = "chat" | "settings";
 export type KnowledgeMode = "LOCAL_AUTO_WEB" | "LOCAL_ONLY" | "ASK_BEFORE_WEB";
 export type ToolUseMode = "AUTO" | "OFF";
@@ -48,6 +50,7 @@ export interface ToolTraceEntry {
 export interface AppSettings {
   theme: ThemeName;
   textSize: number;
+  colorOverrides: Partial<Record<ThemeName, Partial<ThemeColors>>>;
 }
 
 export interface BackendSettings {

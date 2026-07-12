@@ -33,7 +33,9 @@ assert(appSource.includes('title="Instructions"'), "Settings should include a us
 assert(appSource.includes("userInstructions"), "Settings should persist user instructions through backend settings.");
 assert(appSource.includes("toolDefinitionTokens"), "Context UI should show tool definition/reserve accounting.");
 assert(appSource.includes("imageReserveTokens"), "Context UI should show screenshot reserve accounting.");
-assert(appSource.includes("<ReadinessPanel"), "Chat should show Blender and model readiness before generation.");
+assert(!appSource.includes("<ReadinessPanel"), "Chat should not show a model-readiness check button beside the chat controls.");
+assert(appSource.includes('className="header-chat-controls"'), "Context and chat history controls should live in the title bar.");
+assert(!appSource.includes('className="floating-controls"'), "Context and chat history controls should no longer float over the chat.");
 assert(appSource.includes("cancelMessage"), "Generation should provide a cancellable Stop flow.");
 assert(appSource.includes("<CurrentCheckpoint"), "Completed answers should expose checkpoint recovery actions.");
 assert(appSource.includes("saveChatNotebook"), "Project notebook changes should be saved per chat.");
@@ -59,13 +61,15 @@ assert(
   !studioSource.includes('<span><Compass size={16} /> Current checkpoint</span>'),
   "The composer should not repeat the latest answer inside a separate checkpoint summary.",
 );
-assert(
-  stylesSource.includes(".readiness-panel.compact"),
-  "Readiness and generation controls should float compactly instead of consuming a full chat row.",
-);
+assert(!studioSource.includes("function ReadinessPanel"), "The removed readiness control should not remain as unused UI code.");
+assert(stylesSource.includes(".header-chat-controls"), "Title-bar chat controls should have their own layout styling.");
 assert(appSource.includes('label="Web access"'), "Settings should separate web policy from tool use.");
 assert(appSource.includes('"ASK_BEFORE_WEB"'), "Ask before web should be offered as the safe web policy.");
 assert(appSource.includes("modelStatus"), "Settings and chat should surface loaded model capabilities.");
+assert(appSource.includes("ColorStudio"), "Settings should expose a dedicated color studio.");
+assert(appSource.includes("colorOverrides"), "Theme color choices should persist in app settings.");
+assert(stylesSource.includes("--theme-assistant-bar"), "The Blendy message bar should have its own theme color token.");
+assert(stylesSource.includes(".color-swatch-control"), "Each theme color should have an interactive swatch control.");
 for (const [operation, nextOperation] of [
   ["compactNow", "freshChat"],
   ["freshChat", "switchChat"],
