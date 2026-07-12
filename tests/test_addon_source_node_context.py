@@ -26,6 +26,13 @@ class AddonSourceNodeContextTests(unittest.TestCase):
         self.assertIn("Material node tree", self.source)
         self.assertIn("Geometry node tree from modifier", self.source)
 
+    def test_context_line_does_not_call_an_unselected_active_object_selected(self) -> None:
+        context_line = self.source[
+            self.source.index("def _bridge_context_line") : self.source.index("def _bridge_should_capture_screenshot")
+        ]
+        self.assertIn("active.select_get()", context_line)
+        self.assertIn('active (not selected)', context_line)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -66,6 +66,10 @@ assert(stylesSource.includes(".header-chat-controls"), "Title-bar chat controls 
 assert(appSource.includes('label="Web access"'), "Settings should separate web policy from tool use.");
 assert(appSource.includes('"ASK_BEFORE_WEB"'), "Ask before web should be offered as the safe web policy.");
 assert(appSource.includes("modelStatus"), "Settings and chat should surface loaded model capabilities.");
+assert(appSource.includes("ColorStudio"), "Settings should expose a dedicated color studio.");
+assert(appSource.includes("colorOverrides"), "Theme color choices should persist in app settings.");
+assert(stylesSource.includes("--theme-assistant-bar"), "The Blendy message bar should have its own theme color token.");
+assert(stylesSource.includes(".color-swatch-control"), "Each theme color should have an interactive swatch control.");
 for (const [operation, nextOperation] of [
   ["compactNow", "freshChat"],
   ["freshChat", "switchChat"],

@@ -43,6 +43,8 @@ import type {
   ModelStatus,
   PageName,
   ProjectNotebook,
+  ThemeColorRole,
+  ThemeColors,
   ThemeName,
   ToolUseMode,
 } from "./types";
@@ -52,6 +54,7 @@ const SETTINGS_KEY = "blendy.prototype.settings";
 const defaultSettings: AppSettings = {
   theme: "solar",
   textSize: 15,
+  colorOverrides: {},
 };
 
 const defaultBackendSettings: BackendSettings = {
@@ -74,6 +77,65 @@ const themeLabels: Record<ThemeName, string> = {
   sprint: "Neon Sprint (Dark)",
 };
 
+const themeColorDefaults: Record<ThemeName, ThemeColors> = {
+  solar: {
+    background: "#f4efe3",
+    panel: "#fffaf0",
+    text: "#1d2927",
+    inputBorder: "#9b5c16",
+    button: "#9b5c16",
+    highlight: "#14796f",
+    assistantBar: "#9b5c16",
+  },
+  sprint: {
+    background: "#0d0e16",
+    panel: "#202234",
+    text: "#f1f0ff",
+    inputBorder: "#e267ff",
+    button: "#e267ff",
+    highlight: "#38e7df",
+    assistantBar: "#e267ff",
+  },
+};
+
+const themeColorControls: Array<{ role: ThemeColorRole; label: string; description: string }> = [
+  { role: "background", label: "Background", description: "Main app canvas" },
+  { role: "panel", label: "Panels", description: "Cards and title bar" },
+  { role: "text", label: "Text", description: "Readable app copy" },
+  { role: "inputBorder", label: "Text box border", description: "Message and settings fields" },
+  { role: "button", label: "Buttons", description: "Send and primary actions" },
+  { role: "highlight", label: "Highlights", description: "Focus rings and Blender details" },
+  { role: "assistantBar", label: "Blendy message bar", description: "Vertical guide beside replies" },
+];
+
+function isHexColor(value: unknown): value is string {
+  return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value);
+}
+
+function loadColorOverrides(value: unknown): AppSettings["colorOverrides"] {
+  if (!value || typeof value !== "object") return {};
+  const saved = value as Record<string, unknown>;
+  const overrides: AppSettings["colorOverrides"] = {};
+  for (const theme of ["solar", "sprint"] as ThemeName[]) {
+    const candidate = saved[theme];
+    if (!candidate || typeof candidate !== "object") continue;
+    const colors: Partial<ThemeColors> = {};
+    for (const { role } of themeColorControls) {
+      const color = (candidate as Record<string, unknown>)[role];
+      if (isHexColor(color)) colors[role] = color;
+    }
+    if (Object.keys(colors).length) overrides[theme] = colors;
+  }
+  return overrides;
+}
+
+function resolvedThemeColors(settings: AppSettings): ThemeColors {
+  return {
+    ...themeColorDefaults[settings.theme],
+    ...settings.colorOverrides[settings.theme],
+  };
+}
+
 function loadSettings(): AppSettings {
   try {
     const raw = window.localStorage.getItem(SETTINGS_KEY);
@@ -83,11 +145,13 @@ function loadSettings(): AppSettings {
     const saved = JSON.parse(raw) as {
       theme?: ThemeName;
       textSize?: number;
+      colorOverrides?: unknown;
     };
     return {
       ...defaultSettings,
-      theme: saved.theme || defaultSettings.theme,
-      textSize: saved.textSize || defaultSettings.textSize,
+      theme: saved.theme === "sprint" ? "sprint" : "solar",
+      textSize: Number.isFinite(saved.textSize) ? Number(saved.textSize) : defaultSettings.textSize,
+      colorOverrides: loadColorOverrides(saved.colorOverrides),
     };
   } catch (_error) {
     return defaultSettings;
@@ -286,9 +350,18 @@ function App() {
 
   useEffect(() => {
     const themeFont = settings.theme === "sprint" ? "fraktion" : "geist";
-    document.documentElement.dataset.theme = settings.theme;
-    document.documentElement.dataset.font = themeFont;
-    document.documentElement.style.setProperty("--app-font-size", `${settings.textSize}px`);
+    const root = document.documentElement;
+    const colors = resolvedThemeColors(settings);
+    root.dataset.theme = settings.theme;
+    root.dataset.font = themeFont;
+    root.style.setProperty("--app-font-size", `${settings.textSize}px`);
+    root.style.setProperty("--theme-background", colors.background);
+    root.style.setProperty("--theme-panel", colors.panel);
+    root.style.setProperty("--theme-text", colors.text);
+    root.style.setProperty("--theme-input-border", colors.inputBorder);
+    root.style.setProperty("--theme-button", colors.button);
+    root.style.setProperty("--theme-highlight", colors.highlight);
+    root.style.setProperty("--theme-assistant-bar", colors.assistantBar);
     window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
   }, [settings]);
 
@@ -1807,6 +1880,27 @@ function SettingsPage({
   chatPath: string;
   onOpenPromptPacket: () => void;
 }) {
+  const colors = resolvedThemeColors(settings);
+  const hasThemeOverrides = Boolean(Object.keys(settings.colorOverrides[settings.theme] || {}).length);
+
+  function updateThemeColor(role: ThemeColorRole, color: string) {
+    updateSettings({
+      colorOverrides: {
+        ...settings.colorOverrides,
+        [settings.theme]: {
+          ...settings.colorOverrides[settings.theme],
+          [role]: color,
+        },
+      },
+    });
+  }
+
+  function restoreThemeColors() {
+    const colorOverrides = { ...settings.colorOverrides };
+    delete colorOverrides[settings.theme];
+    updateSettings({ colorOverrides });
+  }
+
   return (
     <main className="settings-page">
       <section className="settings-hero">
@@ -1825,6 +1919,13 @@ function SettingsPage({
             ["sprint", themeLabels.sprint],
           ]}
           onChange={(theme) => updateSettings({ theme: theme as ThemeName })}
+        />
+        <ColorStudio
+          theme={settings.theme}
+          colors={colors}
+          hasOverrides={hasThemeOverrides}
+          onChange={updateThemeColor}
+          onRestore={restoreThemeColors}
         />
         <label className="range-setting">
           <span>Text size</span>
@@ -2000,6 +2101,52 @@ function SettingsGroup({ title, children }: { title: string; children: React.Rea
     <section className="settings-group">
       <h2>{title}</h2>
       {children}
+    </section>
+  );
+}
+
+function ColorStudio({
+  theme,
+  colors,
+  hasOverrides,
+  onChange,
+  onRestore,
+}: {
+  theme: ThemeName;
+  colors: ThemeColors;
+  hasOverrides: boolean;
+  onChange: (role: ThemeColorRole, color: string) => void;
+  onRestore: () => void;
+}) {
+  return (
+    <section className="color-studio" aria-label={`${themeLabels[theme]} color studio`}>
+      <div className="color-studio-head">
+        <div>
+          <h3>Color studio</h3>
+          <p>Click any swatch to choose exactly what that part of the theme looks like. Changes appear right away and stay saved on this computer.</p>
+        </div>
+        <button type="button" className="color-studio-restore" onClick={onRestore} disabled={!hasOverrides}>
+          Restore {theme === "sprint" ? "Neon Sprint" : "Scholastic Solar"}
+        </button>
+      </div>
+      <div className="color-studio-grid">
+        {themeColorControls.map(({ role, label, description }) => (
+          <label className="color-swatch-control" key={role}>
+            <input
+              type="color"
+              value={colors[role]}
+              onChange={(event) => onChange(role, event.target.value)}
+              aria-label={`${label} color`}
+            />
+            <span className="color-swatch" style={{ backgroundColor: colors[role] }} aria-hidden="true" />
+            <span className="color-swatch-copy">
+              <strong>{label}</strong>
+              <small>{description}</small>
+            </span>
+            <code>{colors[role].toUpperCase()}</code>
+          </label>
+        ))}
+      </div>
     </section>
   );
 }
