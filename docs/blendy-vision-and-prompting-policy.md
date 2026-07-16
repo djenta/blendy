@@ -41,10 +41,14 @@ not required.
 Answers should:
 
 - briefly orient the user to what is visible now;
+- choose a new project's base primitive from the intended silhouette and
+  topology instead of preserving Blender's default object by habit;
 - give the smallest useful next action;
 - name the Blender area and control in plain language;
 - include a clear visual or numeric "done when" check;
 - prefer non-destructive, reversible Blender workflows;
+- compare visible results against the prior "done when" promise, reject advice
+  that visibly failed, and give the cleanest recovery without defending it;
 - ask one focused question when the goal or evidence is genuinely ambiguous.
 
 Workflow and troubleshooting cards are optional references. They use one
