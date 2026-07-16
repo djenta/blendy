@@ -6,6 +6,9 @@ const { registerBackendIpc } = require("./backend.cjs");
 
 const isDev = !app.isPackaged;
 let mainWindow;
+let closeApproved = false;
+let closeRequestPending = false;
+let closeFallbackTimer = null;
 
 const singleInstanceLock = app.requestSingleInstanceLock();
 
@@ -112,6 +115,13 @@ function createWindow() {
     },
   });
 
+  closeApproved = false;
+  closeRequestPending = false;
+  if (closeFallbackTimer) {
+    clearTimeout(closeFallbackTimer);
+    closeFallbackTimer = null;
+  }
+
   const packagedRendererUrl = pathToFileURL(path.join(__dirname, "../dist/index.html")).toString();
   const isTrustedRendererUrl = (url) => isDev
     ? /^http:\/\/(127\.0\.0\.1|localhost):5187(?:\/|$)/.test(String(url || ""))
@@ -147,7 +157,34 @@ function createWindow() {
   mainWindow.once("ready-to-show", showMainWindow);
   mainWindow.webContents.once("did-finish-load", showMainWindow);
 
-  mainWindow.on("close", () => writeWindowState(mainWindow));
+  mainWindow.on("close", (event) => {
+    writeWindowState(mainWindow);
+    if (closeApproved || mainWindow.webContents.isDestroyed()) {
+      return;
+    }
+    event.preventDefault();
+    if (closeRequestPending) {
+      return;
+    }
+    closeRequestPending = true;
+    mainWindow.webContents.send("window:close-requested");
+    closeFallbackTimer = setTimeout(() => {
+      if (!mainWindow || mainWindow.isDestroyed() || !closeRequestPending) {
+        return;
+      }
+      closeApproved = true;
+      closeRequestPending = false;
+      closeFallbackTimer = null;
+      mainWindow.close();
+    }, 5000);
+  });
+  mainWindow.on("closed", () => {
+    if (closeFallbackTimer) clearTimeout(closeFallbackTimer);
+    closeFallbackTimer = null;
+    closeRequestPending = false;
+    closeApproved = false;
+    mainWindow = null;
+  });
   mainWindow.on("resize", () => writeWindowState(mainWindow));
   mainWindow.on("move", () => writeWindowState(mainWindow));
 
@@ -216,4 +253,23 @@ ipcMain.handle("window:minimize", (event) => {
 ipcMain.handle("window:close", (event) => {
   assertMainWindowSender(event);
   mainWindow?.close();
+});
+
+ipcMain.handle("window:confirm-close", (event) => {
+  assertMainWindowSender(event);
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  closeApproved = true;
+  closeRequestPending = false;
+  if (closeFallbackTimer) clearTimeout(closeFallbackTimer);
+  closeFallbackTimer = null;
+  mainWindow.close();
+});
+
+ipcMain.handle("window:cancel-close", (event) => {
+  assertMainWindowSender(event);
+  closeRequestPending = false;
+  if (closeFallbackTimer) clearTimeout(closeFallbackTimer);
+  closeFallbackTimer = null;
+  mainWindow?.show();
+  mainWindow?.focus();
 });

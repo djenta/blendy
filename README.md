@@ -6,7 +6,7 @@ context, and does not execute model-written Blender Python.
 
 ## Download
 
-[![Download Blendy 2.0.1 for Windows](https://img.shields.io/badge/Download-Blendy%202.0.1%20for%20Windows-2ea44f?style=for-the-badge&logo=windows)](https://github.com/djenta/blendy/releases/latest)
+[![Download Blendy 2.1.0 for Windows](https://img.shields.io/badge/Download-Blendy%202.1.0%20for%20Windows-2ea44f?style=for-the-badge&logo=windows)](https://github.com/djenta/blendy/releases/latest)
 
 <p>
   <a href="docs/screenshots/blendy-promo-1.png"><img src="docs/screenshots/blendy-promo-1.png" alt="Blendy 2 project starting screen with readiness status and guided Blender prompts" width="100%"></a>
@@ -21,7 +21,7 @@ context, and does not execute model-written Blender Python.
 Download the Windows installer from the latest GitHub Release:
 
 ```text
-Blendy Local AI Tutor Setup 2.0.1.exe
+Blendy Local AI Tutor Setup 2.1.0.exe
 ```
 
 The 2.0 installer is not code-signed, so Windows SmartScreen may show an
@@ -48,7 +48,7 @@ http://localhost:1234/v1
 
 ## Install On Windows
 
-1. Download `Blendy Local AI Tutor Setup 2.0.1.exe`.
+1. Download `Blendy Local AI Tutor Setup 2.1.0.exe`.
 2. Run the installer.
 3. Open Blender.
 4. In the 3D View, press `N` to open the right sidebar.
@@ -108,7 +108,14 @@ Installer add-on logs are written to:
   fresh scene and tells you whether the expected change is visible.
 - Use `I'm stuck` for a smaller recovery step or `Show me where` for the exact
   Blender area and control.
-- Attach up to two reference images when the visual target matters.
+- Every submitted message captures a fresh full Blender window plus exact live
+  scene state. The evidence strip beside the composer shows whether the screen
+  and scene are ready before you send.
+- Attach up to two reference images when the visual target matters. They stay
+  attached for later steps and retries until you remove them.
+- The context menu separates the estimated next request from LM Studio's
+  measured previous request, and shows how much chat is recent, summarized, and
+  still stored locally.
 - Keep goals, decisions, and recurring constraints in the Project Notebook.
   The notebook belongs to the chat and does not lock that chat to one `.blend`.
 - If Blender changes to a different saved scene, Blendy warns you before old
@@ -150,13 +157,18 @@ and private-network limits.
 Stored locally on your computer:
 
 - app settings
-- chats
-- diagnostics
-- prompt packets sent to LM Studio
+- the complete chat transcript and compacted context summaries
+- diagnostics and text-only prompt packets sent to LM Studio
 - Blender scene facts
 - the current `.blend` path when Blender reports one, used only for the optional
   scene-mismatch warning
 - bridge discovery data
+
+Blender screenshots are temporary. Blendy sends them to the local model, deletes
+the capture file immediately afterward, and removes stale Blendy capture files
+left by a previous crash. Screenshot and reference-image bytes are not written
+to chat history or diagnostic prompt packets. LM Studio's own optional logging
+settings are separate from Blendy.
 
 ## Developer Build
 

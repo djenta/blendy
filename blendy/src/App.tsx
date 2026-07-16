@@ -26,6 +26,7 @@ import { contextSnapshot as mockContextSnapshot, seedMessages } from "./data";
 import {
   CurrentCheckpoint,
   EmptyStudioState,
+  EvidenceStrip,
   ProjectNotebookEditor,
   ReferenceAttachmentTray,
   SceneMismatchBanner,
@@ -38,6 +39,7 @@ import type {
   ChatEvent,
   ChatSession,
   ContextSnapshot,
+  EvidenceCaptureState,
   KnowledgeMode,
   Message,
   ModelStatus,
@@ -176,13 +178,97 @@ function clampContextLimit(value: number): number {
   return Math.min(CONTEXT_LIMIT_MAX_TOKENS, Math.max(CONTEXT_LIMIT_MIN_TOKENS, Math.round(value)));
 }
 
-function contextButtonLabel(contextSnapshot: ContextSnapshot): string {
-  const used = contextSnapshot.contextTokens || 0;
-  const limit = contextSnapshot.contextLimitTokens || 70000;
-  const conversation = contextSnapshot.conversationTokens || 0;
-  const tools = (contextSnapshot.toolDefinitionTokens || 0) + (contextSnapshot.toolReserveTokens || 0);
-  const screenshot = contextSnapshot.imageReserveTokens || 0;
-  return `Context ${formatTokens(used)} / ${formatTokens(limit)}. Conversation ${formatTokens(conversation)}. Tools ${formatTokens(tools)}. Screenshot ${formatTokens(screenshot)}.`;
+function configuredContextLimit(contextSnapshot: ContextSnapshot, backendSettings: BackendSettings): number {
+  return clampContextLimit(backendSettings.contextLimitTokens || contextSnapshot.configuredLimitTokens || contextSnapshot.configuredContextLimitTokens || defaultBackendSettings.contextLimitTokens);
+}
+
+function effectiveInputLimit(contextSnapshot: ContextSnapshot): number {
+  return contextSnapshot.effectiveInputLimitTokens || contextSnapshot.contextLimitTokens || 70000;
+}
+
+const IMAGE_RESERVE_MIN_TOKENS = 1200;
+const IMAGE_RESERVE_PER_ITEM_TOKENS = 900;
+
+interface NextRequestEstimate {
+  tokens: number;
+  imageCount: number;
+  imageReserveTokens: number;
+}
+
+function nextRequestEstimate(
+  contextSnapshot: ContextSnapshot,
+  referenceCount = 0,
+  snapshotReferenceCount = 0,
+): NextRequestEstimate {
+  const baseTokens = contextSnapshot.currentRequestTokens || contextSnapshot.contextTokens || 0;
+  const snapshotImageCount = Math.max(0, contextSnapshot.imageCount || 0);
+  const includedReferences = Math.min(snapshotImageCount, Math.max(0, snapshotReferenceCount));
+  const liveImageCount = Math.max(0, snapshotImageCount - includedReferences);
+  const imageCount = liveImageCount + Math.max(0, referenceCount);
+  const currentImageReserve = Math.max(0, contextSnapshot.imageReserveTokens || 0);
+  const imageReserveTokens = imageCount
+    ? Math.max(IMAGE_RESERVE_MIN_TOKENS, imageCount * IMAGE_RESERVE_PER_ITEM_TOKENS)
+    : 0;
+  return {
+    tokens: Math.max(0, baseTokens - currentImageReserve + imageReserveTokens),
+    imageCount,
+    imageReserveTokens,
+  };
+}
+
+function contextUsagePercent(contextSnapshot: ContextSnapshot, estimatedTokens?: number): number {
+  if (estimatedTokens === undefined) {
+    const explicit = contextSnapshot.percent ?? contextSnapshot.contextPercent;
+    if (Number.isFinite(explicit)) return Number(explicit);
+  }
+  const limit = effectiveInputLimit(contextSnapshot);
+  const used = estimatedTokens ?? nextRequestEstimate(contextSnapshot).tokens;
+  return limit > 0 ? Math.round((used / limit) * 100) : 0;
+}
+
+function contextUsageStatus(contextSnapshot: ContextSnapshot, estimatedTokens?: number): "OK" | "WARN" | "DANGER" {
+  if (estimatedTokens === undefined) {
+    const explicit = contextSnapshot.status || contextSnapshot.contextStatus;
+    if (explicit) return explicit;
+  }
+  const percent = contextUsagePercent(contextSnapshot, estimatedTokens);
+  return percent >= 90 ? "DANGER" : percent >= 80 ? "WARN" : "OK";
+}
+
+function modelContextLimit(contextSnapshot: ContextSnapshot, modelStatus?: ModelStatus): number {
+  return contextSnapshot.modelContextTokens || contextSnapshot.modelContextLength || modelStatus?.contextLength || 0;
+}
+
+function answerTokenReserve(contextSnapshot: ContextSnapshot, backendSettings: BackendSettings): number {
+  return contextSnapshot.answerReserveTokens || contextSnapshot.responseReserveTokens || backendSettings.responseMaxTokens || 0;
+}
+
+function formatMeasuredAt(value?: string): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+function contextButtonLabel(
+  contextSnapshot: ContextSnapshot,
+  backendSettings: BackendSettings,
+  modelStatus?: ModelStatus,
+  estimatedTokens?: number,
+): string {
+  const estimated = estimatedTokens ?? nextRequestEstimate(contextSnapshot).tokens;
+  const effective = effectiveInputLimit(contextSnapshot);
+  const configured = configuredContextLimit(contextSnapshot, backendSettings);
+  const model = modelContextLimit(contextSnapshot, modelStatus);
+  const actual = contextSnapshot.lastActualPromptTokens || 0;
+  const actualText = actual ? ` Last LM Studio request used ${formatTokens(actual)} input tokens.` : " No measured LM Studio request yet.";
+  return `Estimated next request ${formatTokens(estimated)} of ${formatTokens(effective)} effective input. Configured ${formatTokens(configured)}${model ? `; loaded model ${formatTokens(model)}` : ""}.${actualText}`;
+}
+
+function evidenceStateFromContext(contextSnapshot: ContextSnapshot): EvidenceCaptureState {
+  if (contextSnapshot.screenshotDeliveredToModel ?? contextSnapshot.usedScreenshot) return "delivered";
+  if (contextSnapshot.screenshotCaptured && contextSnapshot.modelVision === false) return "facts-only";
+  return "failed";
 }
 
 const MAX_REFERENCE_SOURCE_BYTES = 32 * 1024 * 1024;
@@ -235,9 +321,11 @@ function receiptContextLabel(receipt?: AssistantReceipt, toolTrace?: AssistantRe
   const usedScene = receipt?.usedScene || trace.some((entry) => entry.sceneUsed || /scene|context/i.test(entry.call?.name || entry.name || ""));
   const usedScreenshot = receipt?.usedScreenshot || trace.some((entry) => entry.screenshotUsed || /screen|visual|image/i.test(entry.call?.name || entry.name || ""));
   const tools = trace.map((entry) => entry.call?.name || entry.name).filter(Boolean);
+  const referenceCount = receipt?.referenceCount || receipt?.referenceImages?.filter((image) => image.used !== false).length || 0;
   const parts = [
     usedScene ? "live scene" : "available context",
     usedScreenshot ? "fresh screen" : "",
+    referenceCount ? `${referenceCount} reference${referenceCount === 1 ? "" : "s"}` : "",
     tools.length ? `${tools.length} local check${tools.length === 1 ? "" : "s"}` : "",
   ].filter(Boolean);
   return `Used: ${parts.join(" + ")}`;
@@ -292,6 +380,9 @@ function App() {
   const [notebookSaved, setNotebookSaved] = useState(true);
   const [referenceImages, setReferenceImages] = useState<ReferenceImage[]>([]);
   const [referenceError, setReferenceError] = useState("");
+  const [referencePreparing, setReferencePreparing] = useState(false);
+  const [evidenceCaptureState, setEvidenceCaptureState] = useState<EvidenceCaptureState>("idle");
+  const [snapshotReferenceCount, setSnapshotReferenceCount] = useState(0);
   const [generationStage, setGenerationStage] = useState<{ stage: string; label: string } | undefined>(undefined);
   const [chatPath, setChatPath] = useState("");
   const [prompt, setPrompt] = useState("");
@@ -318,7 +409,11 @@ function App() {
   const backendSettingsRef = useRef(backendSettings);
   const lastSubmittedPromptRef = useRef("");
   const promptRef = useRef("");
+  const notebookDraftRef = useRef("");
   const notebookSavedRef = useRef(true);
+  const lastNotebookAutoSaveAttemptRef = useRef("");
+  const referencePreparationTokenRef = useRef(0);
+  const closeRequestHandlingRef = useRef(false);
   const generatedSnapTokenRef = useRef(0);
   const programmaticScrollUntilRef = useRef(0);
   const messageSignatureRef = useRef("");
@@ -328,6 +423,10 @@ function App() {
   useEffect(() => {
     promptRef.current = prompt;
   }, [prompt]);
+
+  useEffect(() => {
+    notebookDraftRef.current = notebookDraft;
+  }, [notebookDraft]);
 
   useEffect(() => {
     notebookSavedRef.current = notebookSaved;
@@ -341,12 +440,17 @@ function App() {
     backendSettingsRef.current = backendSettings;
   }, [backendSettings]);
 
+
   useEffect(() => {
-    if (modelStatus?.vision === false && referenceImages.length) {
-      setReferenceImages([]);
-      setReferenceError("The loaded model cannot read images. Use scene data or load a vision-capable model.");
-    }
-  }, [modelStatus?.vision, referenceImages.length]);
+    if (!window.blendyApp?.saveChatNotebook || !activeChatId || notebookSaved || notebookSaving) return;
+    const attemptKey = `${activeChatId}:${notebookDraft}`;
+    if (lastNotebookAutoSaveAttemptRef.current === attemptKey) return;
+    const timer = window.setTimeout(() => {
+      lastNotebookAutoSaveAttemptRef.current = attemptKey;
+      void persistNotebookDraft({ silent: true });
+    }, 800);
+    return () => window.clearTimeout(timer);
+  }, [activeChatId, notebookDraft, notebookSaved, notebookSaving]);
 
   useEffect(() => {
     const themeFont = settings.theme === "sprint" ? "fraktion" : "geist";
@@ -370,6 +474,13 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const unsubscribe = window.blendyWindow?.onCloseRequested?.(() => {
+      void handleSystemCloseRequest();
+    });
+    return unsubscribe;
+  }, [activeChatId, notebookDraft, notebookSaved, notebookSaving, projectNotebook.text]);
+
+  useEffect(() => {
     if (!window.blendyApp) {
       return;
     }
@@ -381,7 +492,7 @@ function App() {
         if (cancelled) {
           return;
         }
-        setContextSnapshot(state.context);
+        acceptContextSnapshot(state.context);
         setBackendSettings({ ...defaultBackendSettings, ...state.backendSettings });
         if (state.modelStatus) {
           setModelStatus(state.modelStatus);
@@ -492,6 +603,19 @@ function App() {
     window.addEventListener("keydown", handleEscape);
     return () => window.removeEventListener("keydown", handleEscape);
   }, [chatMenuOpen, contextMenuOpen, drawerOpen]);
+
+  function acceptContextSnapshot(snapshot: ContextSnapshot, includedReferenceCount = 0) {
+    setContextSnapshot(snapshot);
+    setSnapshotReferenceCount(Math.max(0, includedReferenceCount));
+  }
+
+  function resetReferencesForChatChange() {
+    referencePreparationTokenRef.current += 1;
+    setReferencePreparing(false);
+    setReferenceImages([]);
+    setReferenceError("");
+    setEvidenceCaptureState("idle");
+  }
 
   function applyDiagnostics(diagnostics?: {
     chatPath?: string;
@@ -699,7 +823,7 @@ function App() {
     window.blendyApp
       ?.getState()
       .then((state) => {
-        setContextSnapshot(state.context);
+        acceptContextSnapshot(state.context);
         setBackendSettings({ ...defaultBackendSettings, ...state.backendSettings });
         if (state.modelStatus) setModelStatus(state.modelStatus);
         if (state.projectNotebook) {
@@ -733,7 +857,7 @@ function App() {
     }
   }
 
-  async function persistNotebookDraft() {
+  async function persistNotebookDraft(options: { silent?: boolean } = {}) {
     const nextText = notebookDraft.trim();
     if (nextText === (projectNotebook.text || "").trim()) {
       setNotebookSaved(true);
@@ -752,19 +876,24 @@ function App() {
         ? returned
         : { ...projectNotebook, text: nextText };
       if (activeChatIdRef.current === savingChatId) {
+        const currentDraft = notebookDraftRef.current.trim();
+        const savedText = String(nextNotebook.text || "").trim();
+        const stillMatchesSavedRequest = currentDraft === nextText;
         setProjectNotebook(nextNotebook);
-        setNotebookDraft(nextNotebook.text || "");
-        setNotebookSaved(true);
-        notebookSavedRef.current = true;
+        if (stillMatchesSavedRequest) setNotebookDraft(nextNotebook.text || "");
+        setNotebookSaved(stillMatchesSavedRequest && currentDraft === savedText);
+        notebookSavedRef.current = stillMatchesSavedRequest && currentDraft === savedText;
       }
       return true;
     } catch (error) {
       setNotebookSaved(false);
       notebookSavedRef.current = false;
-      setMessages((current) => [
-        ...current,
-        operationNotice("Notebook was not saved", error, "Your text is still in the editor. Keep the workspace open and choose Save notebook again."),
-      ]);
+      if (!options.silent) {
+        setMessages((current) => [
+          ...current,
+          operationNotice("Notebook was not saved", error, "Your text is still in the editor. Keep the workspace open and choose Save notebook again."),
+        ]);
+      }
       return false;
     } finally {
       setNotebookSaving(false);
@@ -796,6 +925,7 @@ function App() {
   }
 
   async function addReferenceFiles(files: FileList) {
+    if (referencePreparing) return;
     setReferenceError("");
     const remaining = Math.max(0, 2 - referenceImages.length);
     if (!remaining) {
@@ -813,16 +943,25 @@ function App() {
       setReferenceError(`${tooLarge.name} is over 32 MB. Export a smaller copy, then try again.`);
       return;
     }
+    const preparationToken = referencePreparationTokenRef.current + 1;
+    const preparationChatId = activeChatId;
+    referencePreparationTokenRef.current = preparationToken;
+    setReferencePreparing(true);
     try {
       const loaded = await Promise.all(candidates.map(async (file) => ({
         id: crypto.randomUUID(),
         name: file.name,
         dataUrl: await prepareReferenceImage(file, inferReferenceMimeType(file.name, file.type)),
       })));
+      if (referencePreparationTokenRef.current !== preparationToken || activeChatIdRef.current !== preparationChatId) return;
       setReferenceImages((current) => [...current, ...loaded].slice(0, 2));
       if (files.length > remaining) setReferenceError("Only the first two reference images were added.");
     } catch (error) {
-      setReferenceError(error instanceof Error ? error.message : "Blendy could not read that image. Try another file.");
+      if (referencePreparationTokenRef.current === preparationToken && activeChatIdRef.current === preparationChatId) {
+        setReferenceError(error instanceof Error ? error.message : "Blendy could not read that image. Try another file.");
+      }
+    } finally {
+      if (referencePreparationTokenRef.current === preparationToken) setReferencePreparing(false);
     }
   }
 
@@ -833,6 +972,38 @@ function App() {
     if (typeof actual === "boolean") {
       setPinned(actual);
     }
+  }
+
+  async function handleSystemCloseRequest() {
+    if (closeRequestHandlingRef.current) return;
+    closeRequestHandlingRef.current = true;
+    try {
+      if (notebookSaving) {
+        setDrawerOpen(true);
+        await window.blendyWindow?.cancelClose();
+        return;
+      }
+      if (!notebookSavedRef.current && !(await persistNotebookDraft())) {
+        setDrawerOpen(true);
+        await window.blendyWindow?.cancelClose();
+        return;
+      }
+      await window.blendyWindow?.confirmClose();
+    } finally {
+      closeRequestHandlingRef.current = false;
+    }
+  }
+
+  async function closeAppWindow() {
+    if (notebookSaving) {
+      setDrawerOpen(true);
+      return;
+    }
+    if (!notebookSavedRef.current && !(await persistNotebookDraft())) {
+      setDrawerOpen(true);
+      return;
+    }
+    await window.blendyWindow?.close();
   }
 
   function handleScroll() {
@@ -862,17 +1033,15 @@ function App() {
 
   async function sendPrompt(promptOverride?: string) {
     const cleanPrompt = (promptOverride ?? prompt).trim();
-    if (!cleanPrompt || isGenerating) {
+    if (!cleanPrompt || isGenerating || notebookSaving || referencePreparing) {
       return;
     }
 
-    if (promptOverride === undefined) setPrompt("");
-    lastSubmittedPromptRef.current = cleanPrompt;
-    setIsGenerating(true);
-    setGenerationStage({ stage: "preparing", label: "Preparing scene context" });
-    setLatestDone(false);
-
     if (!window.blendyApp) {
+      if (promptOverride === undefined) setPrompt("");
+      lastSubmittedPromptRef.current = cleanPrompt;
+      setEvidenceCaptureState("failed");
+      setIsGenerating(true);
       const assistantMessage: Message = {
         id: crypto.randomUUID(),
         role: "assistant",
@@ -894,14 +1063,35 @@ function App() {
       return;
     }
 
+    setEvidenceCaptureState("capturing");
+    setIsGenerating(true);
+    setGenerationStage({
+      stage: notebookSavedRef.current ? "preparing" : "saving-notebook",
+      label: notebookSavedRef.current ? "Preparing scene context" : "Saving project notes",
+    });
+    setLatestDone(false);
+
     try {
+      if (!(await persistNotebookDraft())) {
+        setEvidenceCaptureState("idle");
+        setIsGenerating(false);
+        setGenerationStage(undefined);
+        return;
+      }
+      if (promptOverride === undefined) setPrompt("");
+      lastSubmittedPromptRef.current = cleanPrompt;
+      setGenerationStage({ stage: "preparing", label: "Preparing scene context" });
+      const requestReferences = modelStatus?.vision === false
+        ? []
+        : referenceImages.map(({ name, dataUrl }) => ({ name, dataUrl }));
       const result = await window.blendyApp.sendMessage({
         prompt: cleanPrompt,
         backendSettings,
         chatId: activeChatId,
-        referenceImages: referenceImages.map((image) => image.dataUrl),
+        referenceImages: requestReferences,
       });
-      setContextSnapshot(result.context);
+      acceptContextSnapshot(result.context, requestReferences.length);
+      setEvidenceCaptureState(evidenceStateFromContext(result.context));
       if (result.modelStatus) setModelStatus(result.modelStatus);
       if (result.projectNotebook) {
         setProjectNotebook(result.projectNotebook);
@@ -910,8 +1100,6 @@ function App() {
       applyDiagnostics(result.diagnostics);
       beginGeneratedReplySnap(result.assistantMessage.id);
       setGenerationStage({ stage: "thinking", label: "Reading your project" });
-      setReferenceImages([]);
-      setReferenceError("");
       if (result.messages) {
         setMessages(result.messages);
       } else {
@@ -922,16 +1110,11 @@ function App() {
         ]);
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
       if (!promptRef.current.trim()) setPrompt(cleanPrompt);
+      setEvidenceCaptureState("failed");
       setMessages((current) => [
         ...current,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: message,
-          status: "failed",
-        },
+        operationNotice("Message was not sent", error, "Your question is back in the composer. Fix the connection or screen-capture issue, then press Send again."),
       ]);
       setIsGenerating(false);
       setGenerationStage(undefined);
@@ -950,29 +1133,46 @@ function App() {
   }
 
   async function regenerateLatest() {
-    if (isGenerating) {
+    if (isGenerating || notebookSaving || referencePreparing || !window.blendyApp) {
       return;
     }
-    if (!window.blendyApp) {
-      return;
-    }
+    setEvidenceCaptureState("capturing");
     setIsGenerating(true);
-    setGenerationStage({ stage: "preparing", label: "Preparing a new answer" });
+    setGenerationStage({
+      stage: notebookSavedRef.current ? "preparing" : "saving-notebook",
+      label: notebookSavedRef.current ? "Preparing a new answer" : "Saving project notes",
+    });
     setLatestDone(false);
     try {
+      if (!(await persistNotebookDraft())) {
+        setEvidenceCaptureState("idle");
+        setIsGenerating(false);
+        setGenerationStage(undefined);
+        return;
+      }
+      setGenerationStage({ stage: "preparing", label: "Preparing a new answer" });
+      const requestReferences = modelStatus?.vision === false
+        ? []
+        : referenceImages.map(({ name, dataUrl }) => ({ name, dataUrl }));
       const result = await window.blendyApp.regenerateLast({
         backendSettings,
         chatId: activeChatId,
+        referenceImages: requestReferences,
       });
-      setContextSnapshot(result.context);
+      acceptContextSnapshot(result.context, requestReferences.length);
+      setEvidenceCaptureState(evidenceStateFromContext(result.context));
       if (result.modelStatus) setModelStatus(result.modelStatus);
-      if (result.projectNotebook) setProjectNotebook(result.projectNotebook);
+      if (result.projectNotebook) {
+        setProjectNotebook(result.projectNotebook);
+        if (notebookSavedRef.current) setNotebookDraft(result.projectNotebook.text || "");
+      }
       applyDiagnostics(result.diagnostics);
       beginGeneratedReplySnap(result.assistantMessage.id);
       setMessages((current) => result.messages?.length ? result.messages : [...current, result.assistantMessage]);
       setGenerationStage({ stage: "thinking", label: "Reading your project" });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      setEvidenceCaptureState("failed");
       setMessages((current) => [
         ...current,
         {
@@ -988,7 +1188,7 @@ function App() {
   }
 
   async function compactNow() {
-    if (!window.blendyApp || isGenerating || isManagingContext || notebookSaving) {
+    if (!window.blendyApp || isGenerating || isManagingContext || notebookSaving || referencePreparing) {
       return;
     }
     setContextMenuOpen(false);
@@ -997,7 +1197,7 @@ function App() {
       if (!(await persistNotebookDraft())) return;
       const result = await window.blendyApp.compactChat({ backendSettings });
       setMessages(result.messages);
-      setContextSnapshot(result.context);
+      acceptContextSnapshot(result.context);
       if (result.modelStatus) setModelStatus(result.modelStatus);
       if (result.projectNotebook) {
         setProjectNotebook(result.projectNotebook);
@@ -1016,7 +1216,7 @@ function App() {
   }
 
   async function freshChat() {
-    if (!window.blendyApp || isGenerating || isManagingContext || notebookSaving) {
+    if (!window.blendyApp || isGenerating || isManagingContext || notebookSaving || referencePreparing) {
       return;
     }
     setChatMenuOpen(false);
@@ -1028,14 +1228,14 @@ function App() {
       if (!(await persistNotebookDraft())) return;
       const result = await window.blendyApp.freshChat({ backendSettings });
       setMessages(result.messages);
-      setContextSnapshot(result.context);
+      acceptContextSnapshot(result.context);
       if (result.modelStatus) setModelStatus(result.modelStatus);
       const nextNotebook = result.projectNotebook || { text: "" };
       setProjectNotebook(nextNotebook);
       setNotebookDraft(nextNotebook.text || "");
       setNotebookSaved(true);
-      setReferenceImages([]);
-      setReferenceError("");
+      resetReferencesForChatChange();
+
       applyDiagnostics(result.diagnostics);
       setContextMenuOpen(false);
       setEditingChatId("");
@@ -1052,7 +1252,7 @@ function App() {
   }
 
   async function switchChat(chatId: string) {
-    if (!window.blendyApp || isGenerating || isManagingContext || notebookSaving || chatId === activeChatId) {
+    if (!window.blendyApp || isGenerating || isManagingContext || notebookSaving || referencePreparing || chatId === activeChatId) {
       setChatMenuOpen(false);
       return;
     }
@@ -1065,14 +1265,14 @@ function App() {
       if (!(await persistNotebookDraft())) return;
       const result = await window.blendyApp.switchChat({ chatId, backendSettings });
       setMessages(result.messages);
-      setContextSnapshot(result.context);
+      acceptContextSnapshot(result.context);
       if (result.modelStatus) setModelStatus(result.modelStatus);
       const nextNotebook = result.projectNotebook || { text: "" };
       setProjectNotebook(nextNotebook);
       setNotebookDraft(nextNotebook.text || "");
       setNotebookSaved(true);
-      setReferenceImages([]);
-      setReferenceError("");
+      resetReferencesForChatChange();
+
       applyDiagnostics(result.diagnostics);
       setPrompt("");
       requestComposerFocus();
@@ -1120,7 +1320,7 @@ function App() {
   }
 
   async function deleteChat(chatId: string) {
-    if (!window.blendyApp || isGenerating || isManagingContext || notebookSaving) {
+    if (!window.blendyApp || isGenerating || isManagingContext || notebookSaving || referencePreparing) {
       return;
     }
     if (confirmingDeleteChatId !== chatId) {
@@ -1137,14 +1337,14 @@ function App() {
       if (!(await persistNotebookDraft())) return;
       const result = await window.blendyApp.deleteChat({ chatId, backendSettings });
       setMessages(result.messages);
-      setContextSnapshot(result.context);
+      acceptContextSnapshot(result.context);
       if (result.modelStatus) setModelStatus(result.modelStatus);
       const nextNotebook = result.projectNotebook || { text: "" };
       setProjectNotebook(nextNotebook);
       setNotebookDraft(nextNotebook.text || "");
       setNotebookSaved(true);
-      setReferenceImages([]);
-      setReferenceError("");
+      resetReferencesForChatChange();
+
       applyDiagnostics(result.diagnostics);
       setPrompt("");
       requestComposerFocus();
@@ -1164,7 +1364,7 @@ function App() {
     }
     try {
       const context = await window.blendyApp.refreshContext({ forceScreenshot: true, chatId: activeChatId });
-      setContextSnapshot(context);
+      acceptContextSnapshot(context);
     } catch (error) {
       setMessages((current) => [
         ...current,
@@ -1186,9 +1386,28 @@ function App() {
     }
   }
 
-  const latestAssistant = [...messages]
+  const newestResponseOutcome = [...messages]
     .reverse()
-    .find((message) => message.role === "assistant" && message.status === "done" && message.content.trim());
+    .find((message) => message.role === "assistant" || (message.role === "event" && message.status === "failed"));
+  const newestAssistant = newestResponseOutcome?.role === "assistant" ? newestResponseOutcome : undefined;
+  const latestAssistant = newestAssistant?.status === "done" && newestAssistant.content.trim()
+    ? newestAssistant
+    : undefined;
+  const eligibleReferenceCount = modelStatus?.vision === false ? 0 : referenceImages.length;
+  const currentNextRequestEstimate = nextRequestEstimate(contextSnapshot, eligibleReferenceCount, snapshotReferenceCount);
+  const estimatedContextTokens = currentNextRequestEstimate.tokens;
+  const effectiveContextTokens = effectiveInputLimit(contextSnapshot);
+  const configuredContextTokens = configuredContextLimit(contextSnapshot, backendSettings);
+  const loadedModelContextTokens = modelContextLimit(contextSnapshot, modelStatus);
+  const reservedAnswerTokens = answerTokenReserve(contextSnapshot, backendSettings);
+  const contextPercentValue = contextUsagePercent(contextSnapshot, estimatedContextTokens);
+  const contextStatusValue = contextUsageStatus(contextSnapshot, estimatedContextTokens);
+  const contextStatusClass = contextStatusValue.toLowerCase();
+  const actualPromptTokens = contextSnapshot.lastActualPromptTokens || 0;
+  const actualCompletionTokens = contextSnapshot.lastActualCompletionTokens || 0;
+  const actualTotalTokens = contextSnapshot.lastActualTotalTokens || actualPromptTokens + actualCompletionTokens;
+  const actualMeasuredAt = formatMeasuredAt(contextSnapshot.lastActualMeasuredAt);
+  const storedTranscriptTokens = contextSnapshot.storedHistoryTokens || contextSnapshot.storedConversationTokens || 0;
 
   const headerChatControls = (
     <div className="header-chat-controls" ref={contextControlRef}>
@@ -1200,52 +1419,82 @@ function App() {
       ) : null}
       <div className="context-control">
         <button
-          className="context-usage-button"
+          className={`context-usage-button ${contextStatusClass} ${isGenerating ? "generation-compact" : ""}`}
           type="button"
           onClick={() => {
             setContextMenuOpen((open) => !open);
             setChatMenuOpen(false);
           }}
-          disabled={isGenerating || isManagingContext}
-          title={contextButtonLabel(contextSnapshot)}
-          aria-label={contextButtonLabel(contextSnapshot)}
+          disabled={isGenerating || isManagingContext || referencePreparing}
+          title={contextButtonLabel(contextSnapshot, backendSettings, modelStatus, estimatedContextTokens)}
+          aria-label={contextButtonLabel(contextSnapshot, backendSettings, modelStatus, estimatedContextTokens)}
+          aria-expanded={contextMenuOpen}
         >
           <Info size={15} />
+          <span className="context-usage-value">{formatTokens(estimatedContextTokens)} / {formatTokens(effectiveContextTokens)}</span>
         </button>
         {contextMenuOpen && (
-          <div className="context-menu">
-            <div className="context-menu-meter">
-              <span>{formatTokens(contextSnapshot.contextTokens || 0)}</span>
-              <strong>{contextSnapshot.contextPercent || 0}%</strong>
+          <div className="context-menu" role="region" aria-label="Context budget details">
+            <div className="context-menu-heading">
+              <span>Estimated next request</span>
+              <strong>{formatTokens(estimatedContextTokens)} / {formatTokens(effectiveContextTokens)}</strong>
             </div>
-            <div className="context-menu-bar">
-              <span style={{ width: `${Math.min(100, contextSnapshot.contextPercent || 0)}%` }} />
+            <div className="context-menu-meter">
+              <span>Safety-budget estimate</span>
+              <strong>{contextPercentValue}% · {contextStatusValue === "DANGER" ? "Nearly full" : contextStatusValue === "WARN" ? "Getting full" : "Room available"}</strong>
+            </div>
+            <div className={`context-menu-bar ${contextStatusClass}`}>
+              <span style={{ width: `${Math.min(100, contextPercentValue)}%` }} />
             </div>
             <div className="context-menu-breakdown">
               <div>
-                <span>Base context</span>
+                <span>Base + live scene</span>
                 <strong>{formatTokens(contextSnapshot.baselineTokens || 0)}</strong>
               </div>
               <div>
-                <span>Conversation</span>
+                <span>Active conversation</span>
                 <strong>{formatTokens(contextSnapshot.conversationTokens || 0)}</strong>
               </div>
               <div>
-                <span>Tools</span>
+                <span>Tools reserve</span>
                 <strong>{formatTokens((contextSnapshot.toolDefinitionTokens || 0) + (contextSnapshot.toolReserveTokens || 0))}</strong>
               </div>
               <div>
-                <span>Screenshot</span>
-                <strong>{formatTokens(contextSnapshot.imageReserveTokens || 0)}</strong>
+                <span>Image reserve{currentNextRequestEstimate.imageCount ? ` · ${currentNextRequestEstimate.imageCount}` : ""}</span>
+                <strong>{formatTokens(currentNextRequestEstimate.imageReserveTokens)}</strong>
               </div>
               <div>
-                <span>Remaining</span>
-                <strong>{formatTokens(Math.max(0, (contextSnapshot.contextLimitTokens || 0) - (contextSnapshot.contextTokens || 0)))}</strong>
+                <span>Estimated remaining</span>
+                <strong>{formatTokens(Math.max(0, effectiveContextTokens - estimatedContextTokens))}</strong>
               </div>
             </div>
-            <p className="context-menu-note">Compact shrinks conversation history. Tools and screenshot reserve are counted because the local model may need them inside the same answer.</p>
+            <div className="context-limit-details" aria-label="Context limits">
+              <div><span>Configured cap</span><strong>{formatTokens(configuredContextTokens)}</strong></div>
+              <div><span>Loaded model window</span><strong>{loadedModelContextTokens ? formatTokens(loadedModelContextTokens) : "Unknown"}</strong></div>
+              <div><span>Answer reserve</span><strong>{formatTokens(reservedAnswerTokens)}</strong></div>
+              <div><span>Effective input</span><strong>{formatTokens(effectiveContextTokens)}</strong></div>
+            </div>
+            <div className="context-actual">
+              <strong>Last measured by LM Studio</strong>
+              {actualPromptTokens ? (
+                <p>
+                  {formatTokens(actualPromptTokens)} input + {formatTokens(actualCompletionTokens)} answer
+                  {actualTotalTokens ? ` = ${formatTokens(actualTotalTokens)} total` : ""}
+                  {actualMeasuredAt ? ` · ${actualMeasuredAt}` : ""}
+                </p>
+              ) : (
+                <p>No measured request yet. The figure above is an estimate with safety reserves.</p>
+              )}
+            </div>
+            {(contextSnapshot.storedMessageCount || contextSnapshot.summarizedMessageCount) ? (
+              <p className="context-menu-note">
+                Stored transcript: {contextSnapshot.storedMessageCount || 0} messages{storedTranscriptTokens ? ` · about ${formatTokens(storedTranscriptTokens)} text stored` : ""}. {contextSnapshot.summarizedMessageCount || 0} older messages are summarized for the model, not deleted from this chat.
+              </p>
+            ) : (
+              <p className="context-menu-note">Estimated next-turn use includes safety room for tools and images. Measured usage comes directly from LM Studio after an answer.</p>
+            )}
             <button type="button" onClick={compactNow} disabled={isManagingContext}>
-              Compact now
+              Summarize older turns
             </button>
           </div>
         )}
@@ -1258,7 +1507,7 @@ function App() {
             setChatMenuOpen((open) => !open);
             setContextMenuOpen(false);
           }}
-          disabled={isGenerating || isManagingContext}
+          disabled={isGenerating || isManagingContext || referencePreparing}
           title="Chat history"
           aria-label="Chat history"
         >
@@ -1268,7 +1517,7 @@ function App() {
           <div className="chat-history-menu">
             <div className="chat-history-head">
               <span>Chat history</span>
-              <button type="button" onClick={freshChat} disabled={isManagingContext}>
+              <button type="button" onClick={freshChat} disabled={isManagingContext || referencePreparing}>
                 New
               </button>
             </div>
@@ -1294,7 +1543,7 @@ function App() {
                     </form>
                   ) : (
                     <>
-                      <button className="chat-history-title" type="button" onClick={() => switchChat(session.id)}>
+                      <button className="chat-history-title" type="button" onClick={() => switchChat(session.id)} disabled={referencePreparing}>
                         <span>{session.title}</span>
                         <small>{new Date(session.updatedAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</small>
                       </button>
@@ -1304,6 +1553,7 @@ function App() {
                       <button
                         className={`chat-history-icon danger ${confirmingDeleteChatId === session.id ? "confirm" : ""}`}
                         type="button"
+                        disabled={referencePreparing}
                         onClick={() => deleteChat(session.id)}
                         aria-label={confirmingDeleteChatId === session.id ? "Confirm delete chat" : "Delete chat"}
                         title={confirmingDeleteChatId === session.id ? "Click again to delete" : "Delete chat"}
@@ -1323,7 +1573,7 @@ function App() {
 
   return (
     <div className="app-window">
-      <header className="titlebar">
+      <header className={`titlebar ${isGenerating ? "generating" : ""}`}>
         <div className="brand">
           <img className="brand-logo" src={logoUrl} alt="" />
           <div>
@@ -1353,7 +1603,7 @@ function App() {
           <button className="icon-button window-control" type="button" onClick={() => window.blendyWindow?.minimize()} title="Minimize">
             <Minus size={16} />
           </button>
-          <button className="icon-button window-control danger" type="button" onClick={() => window.blendyWindow?.close()} title="Close">
+          <button className="icon-button window-control danger" type="button" onClick={closeAppWindow} title={notebookSaving ? "Saving project notes" : "Close"}>
             <X size={16} />
           </button>
         </div>
@@ -1366,6 +1616,7 @@ function App() {
           backendSettings={backendSettings}
           updateBackendSettings={updateBackendSettings}
           contextSnapshot={contextSnapshot}
+          nextRequestEstimate={currentNextRequestEstimate}
           modelStatus={modelStatus}
           chatPath={chatPath}
           onOpenPromptPacket={openPromptPacket}
@@ -1373,7 +1624,7 @@ function App() {
       ) : (
         <main className={`chat-layout ${drawerOpen ? "drawer-open" : ""}`}>
           <section className="chat-page" aria-hidden={drawerOpen || undefined}>
-            <SceneMismatchBanner notebook={projectNotebook} onKeep={keepChatForCurrentScene} onNewChat={freshChat} />
+            <SceneMismatchBanner notebook={projectNotebook} onKeep={keepChatForCurrentScene} onNewChat={freshChat} disabled={referencePreparing} />
             <div className="messages" ref={scrollRef} onScroll={handleScroll}>
               {messages.length === 0 ? (
                 <EmptyStudioState
@@ -1383,11 +1634,11 @@ function App() {
                   }}
                 />
               ) : (
-                messages.map((message, index) => (
+                messages.map((message) => (
                   <MessageRow
                     key={message.id}
                     message={message}
-                    isLatestAssistant={message.role === "assistant" && index === messages.length - 1}
+                    isLatestAssistant={message.role === "assistant" && message.id === newestAssistant?.id}
                     onRegenerate={regenerateLatest}
                     onReceiptClick={(target) => {
                       if (target.receipt) {
@@ -1411,8 +1662,22 @@ function App() {
                   error={referenceError}
                   supportsVision={modelStatus?.vision !== false}
                   onChoose={addReferenceFiles}
-                  onRemove={(id) => setReferenceImages((current) => current.filter((image) => image.id !== id))}
-                  actions={latestAssistant ? <CurrentCheckpoint disabled={isGenerating} onFollowUp={sendPrompt} /> : undefined}
+                  onRemove={(id) => {
+                    setReferenceImages((current) => current.filter((image) => image.id !== id));
+                    setReferenceError("");
+                  }}
+                  actions={latestAssistant ? <CurrentCheckpoint disabled={isGenerating || notebookSaving || referencePreparing} onFollowUp={sendPrompt} /> : undefined}
+                  preparing={referencePreparing}
+                  isGenerating={isGenerating}
+                  referencesPaused={modelStatus?.vision === false && referenceImages.length > 0}
+                />
+                <EvidenceStrip
+                  bridgeOk={contextSnapshot.bridgeOk}
+                  captureState={evidenceCaptureState}
+                  isGenerating={isGenerating}
+                  visionStatus={contextSnapshot.modelVision ?? modelStatus?.vision}
+                  referenceCount={referenceImages.length}
+                  preparingReferences={referencePreparing}
                 />
                 <div className="composer-input-row">
                   <textarea
@@ -1423,7 +1688,14 @@ function App() {
                     placeholder={contextSnapshot.bridgeOk === false ? "Ask a general Blender question..." : "Describe what you want to make or ask what comes next..."}
                     rows={2}
                   />
-                  <button className="send-button" type="button" onClick={() => sendPrompt()} disabled={!prompt.trim() || isGenerating} aria-label="Send message">
+                  <button
+                    className="send-button"
+                    type="button"
+                    onClick={() => sendPrompt()}
+                    disabled={!prompt.trim() || isGenerating || notebookSaving || referencePreparing}
+                    aria-label={referencePreparing ? "Preparing reference image" : notebookSaving ? "Saving project notes" : "Send message"}
+                    title={referencePreparing ? "Wait for the reference image to finish preparing" : notebookSaving ? "Saving project notes before sending" : "Send message"}
+                  >
                     <Send size={17} />
                   </button>
                 </div>
@@ -1526,7 +1798,7 @@ function MessageRow({ message, isLatestAssistant, onRegenerate, onReceiptClick, 
           {message.context || "View evidence used for this answer"}
         </button>
       ) : message.context ? <div className="used-context static-context">{message.context}</div> : null}
-      {(message.status === "failed" || message.status === "cancelled") && (
+      {isLatestAssistant && (message.status === "failed" || message.status === "cancelled") && (
         <div className="failure-recovery">
           <small>{message.status === "cancelled" ? "Generation stopped. Your question is back in the composer." : "Your question is still available to edit. Nothing was lost."}</small>
           <button className="inline-action" type="button" onClick={onRegenerate}>
@@ -1627,9 +1899,15 @@ function ReceiptDetails({
     };
   }, []);
 
+  const receiptReferenceNames = (receipt.referenceImages || [])
+    .filter((image) => image.used !== false)
+    .map((image) => image.name)
+    .filter(Boolean);
+  const receiptReferenceCount = receipt.referenceCount || receiptReferenceNames.length;
   const evidence = [
     receipt.usedScene || trace.some((entry) => entry.sceneUsed || /scene|context/i.test(entry.call?.name || entry.name || "")) ? "Current Blender scene" : "",
     receipt.usedScreenshot || trace.some((entry) => entry.screenshotUsed || /screen|visual|image/i.test(entry.call?.name || entry.name || "")) ? "Fresh screen capture" : "",
+    receiptReferenceCount ? `${receiptReferenceCount} named reference${receiptReferenceCount === 1 ? "" : "s"}${receiptReferenceNames.length ? `: ${receiptReferenceNames.join(", ")}` : ""}` : "",
     trace.length ? `${trace.length} tool check${trace.length === 1 ? "" : "s"}` : "",
     receipt.safety ? `Safety: ${receipt.safety}` : "",
   ].filter(Boolean);
@@ -1867,6 +2145,7 @@ function SettingsPage({
   backendSettings,
   updateBackendSettings,
   contextSnapshot,
+  nextRequestEstimate,
   modelStatus,
   chatPath,
   onOpenPromptPacket,
@@ -1876,12 +2155,23 @@ function SettingsPage({
   backendSettings: BackendSettings;
   updateBackendSettings: (partial: Partial<BackendSettings>) => void;
   contextSnapshot: ContextSnapshot;
+  nextRequestEstimate: NextRequestEstimate;
   modelStatus?: ModelStatus;
   chatPath: string;
   onOpenPromptPacket: () => void;
 }) {
   const colors = resolvedThemeColors(settings);
   const hasThemeOverrides = Boolean(Object.keys(settings.colorOverrides[settings.theme] || {}).length);
+  const configuredContextTokens = configuredContextLimit(contextSnapshot, backendSettings);
+  const loadedModelContextTokens = modelContextLimit(contextSnapshot, modelStatus);
+  const reservedAnswerTokens = answerTokenReserve(contextSnapshot, backendSettings);
+  const effectiveContextTokens = effectiveInputLimit(contextSnapshot);
+  const estimatedContextTokens = nextRequestEstimate.tokens;
+  const actualPromptTokens = contextSnapshot.lastActualPromptTokens || 0;
+  const actualCompletionTokens = contextSnapshot.lastActualCompletionTokens || 0;
+  const actualTotalTokens = contextSnapshot.lastActualTotalTokens || actualPromptTokens + actualCompletionTokens;
+  const actualMeasuredAt = formatMeasuredAt(contextSnapshot.lastActualMeasuredAt);
+  const storedTranscriptTokens = contextSnapshot.storedHistoryTokens || contextSnapshot.storedConversationTokens || 0;
 
   function updateThemeColor(role: ThemeColorRole, color: string) {
     updateSettings({
@@ -2031,7 +2321,7 @@ function SettingsPage({
               />
             </label>
             <label className="range-setting">
-              <span>Context limit</span>
+              <span>Configured context cap</span>
               <strong>{formatTokens(clampContextLimit(backendSettings.contextLimitTokens))}</strong>
               <input
                 type="range"
@@ -2042,6 +2332,7 @@ function SettingsPage({
                 onChange={(event) => updateBackendSettings({ contextLimitTokens: Number(event.target.value) })}
               />
             </label>
+            <p className="setting-note">This is your ceiling. The loaded model window and reserved answer space can make the effective input budget smaller. Diagnostics shows all three values.</p>
           </div>
         </details>
       </SettingsGroup>
@@ -2049,16 +2340,29 @@ function SettingsPage({
       <SettingsGroup title="Diagnostics">
         <DataLine label="Blender bridge" value={contextSnapshot.bridgeStatus || "Unknown"} />
         <DataLine label="Blender version" value={contextSnapshot.blenderVersion || "Unknown"} />
+        <DataLine label="Configured context cap" value={formatTokens(configuredContextTokens)} />
+        <DataLine label="Loaded model window" value={loadedModelContextTokens ? formatTokens(loadedModelContextTokens) : "Unknown"} />
+        <DataLine label="Reserved for answer" value={formatTokens(reservedAnswerTokens)} />
+        <DataLine label="Effective input budget" value={formatTokens(effectiveContextTokens)} />
         <DataLine
-          label="Context usage"
-          value={`${formatTokens(contextSnapshot.contextTokens || 0)} / ${formatTokens(contextSnapshot.contextLimitTokens || 70000)}`}
+          label="Estimated next request"
+          value={`${formatTokens(estimatedContextTokens)} / ${formatTokens(effectiveContextTokens)} · ${contextUsagePercent(contextSnapshot, estimatedContextTokens)}%`}
         />
-        <DataLine label="Baseline context" value={formatTokens(contextSnapshot.baselineTokens || 0)} />
-        <DataLine label="Conversation context" value={formatTokens(contextSnapshot.conversationTokens || 0)} />
+        <DataLine
+          label="Last LM Studio input"
+          value={actualPromptTokens ? `${formatTokens(actualPromptTokens)}${actualMeasuredAt ? ` · ${actualMeasuredAt}` : ""}` : "Not measured yet"}
+        />
+        <DataLine label="Last LM Studio answer" value={actualPromptTokens ? formatTokens(actualCompletionTokens) : "Not measured yet"} />
+        <DataLine label="Last LM Studio total" value={actualTotalTokens ? formatTokens(actualTotalTokens) : "Not measured yet"} />
+        <DataLine label="Base + live scene estimate" value={formatTokens(contextSnapshot.baselineTokens || 0)} />
+        <DataLine label="Active conversation estimate" value={formatTokens(contextSnapshot.conversationTokens || 0)} />
+        <DataLine label="Stored transcript estimate" value={formatTokens(storedTranscriptTokens || contextSnapshot.conversationTokens || 0)} />
+        <DataLine label="Stored messages" value={String(contextSnapshot.storedMessageCount || 0)} />
+        <DataLine label="Older messages summarized" value={String(contextSnapshot.summarizedMessageCount || 0)} />
         <DataLine label="Tool definitions" value={formatTokens(contextSnapshot.toolDefinitionTokens || 0)} />
-        <DataLine label="Tool reserve" value={formatTokens(contextSnapshot.toolReserveTokens || 0)} />
-        <DataLine label="Screenshot reserve" value={formatTokens(contextSnapshot.imageReserveTokens || 0)} />
-        <DataLine label="Available for conversation" value={formatTokens(contextSnapshot.availableForConversationTokens || 0)} />
+        <DataLine label="Tool safety reserve" value={formatTokens(contextSnapshot.toolReserveTokens || 0)} />
+        <DataLine label="Image safety reserve" value={`${formatTokens(nextRequestEstimate.imageReserveTokens)}${nextRequestEstimate.imageCount ? ` · ${nextRequestEstimate.imageCount} image${nextRequestEstimate.imageCount === 1 ? "" : "s"}` : ""}`} />
+        <DataLine label="Conversation capacity before history" value={formatTokens(contextSnapshot.availableForConversationTokens || 0)} />
         <DataLine label="Bridge URL" value={contextSnapshot.bridgeUrl || backendSettings.bridgeUrl} />
         <DataLine label="Bridge mode" value={contextSnapshot.bridgeSource || backendSettings.bridgeUrl} />
         <DataLine label="Tool use" value={backendSettings.toolUse} />
@@ -2082,7 +2386,7 @@ function SettingsPage({
         <DataLine label="Discovery file" value={contextSnapshot.bridgeDiscoveryPath || "Auto"} />
         <DataLine label="Chat file" value={chatPath || "Not created yet"} />
         <DataLine label="Prompt packet" value={contextSnapshot.promptPacketPath || "Not created yet"} />
-        <p className="setting-note">Diagnostics opens the latest model request Blendy sent for this project, with Blender screen screenshot data omitted, so you can inspect grounding, tool calls, and context accounting.</p>
+        <p className="setting-note">Estimated values include safety reserves for the next turn. Measured values come from LM Studio after a completed answer. Diagnostics opens the latest request with Blender screenshot bytes omitted.</p>
         <button
           className="secondary-button"
           type="button"

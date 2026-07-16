@@ -26,7 +26,7 @@ from . import core
 bl_info = {
     "name": "Local AI Chat",
     "author": "Blendy contributors",
-    "version": (2, 0, 1),
+    "version": (2, 1, 0),
     "blender": (4, 0, 0),
     "location": "View3D > Sidebar > Local AI",
     "description": "Secure live-scene bridge for the Blendy desktop tutor.",
@@ -60,6 +60,9 @@ BLENDY_BRIDGE_MAX_REQUEST_BYTES = 64 * 1024
 BLENDY_BRIDGE_MAX_PROMPT_CHARS = 8_000
 BLENDY_BRIDGE_MAX_IMAGE_BYTES = 10 * 1024 * 1024
 BLENDY_BRIDGE_MAX_JOBS_PER_TICK = 1
+BLENDY_DESKTOP_OVERVIEW_MAX_PX = 1440
+BLENDY_DESKTOP_FOCUSED_MAX_PX = 1200
+BLENDY_CAPTURE_TEMP_MAX_AGE_SECONDS = 24 * 60 * 60
 BLENDY_BRIDGE_ALLOWED_ORIGINS: frozenset[str] = frozenset()
 BLENDY_CONTEXT_TIERS = frozenset({"compact", "focused", "expanded"})
 BLENDY_CONTEXT_CHAR_CAPS = {
@@ -125,9 +128,9 @@ def _bounded_visual_evidence(
     evidence: list[dict[str, str]],
     max_bytes: int = BLENDY_BRIDGE_MAX_IMAGE_BYTES,
 ) -> tuple[list[dict[str, str]], int]:
-    """Prefer the focused editor view and drop lower-value images first."""
+    """Always preserve the full Blender-window overview before optional crops."""
 
-    priorities = {"active_editor": 0, "active-editor": 0, "overview": 1}
+    priorities = {"overview": 0, "active_editor": 1, "active-editor": 1}
     kept = [
         item
         for _index, item in sorted(
@@ -140,6 +143,26 @@ def _bounded_visual_evidence(
         kept.pop()
         omitted += 1
     return kept, omitted
+
+
+def _cleanup_stale_capture_files(
+    temp_dir: Path | None = None,
+    now: float | None = None,
+) -> int:
+    """Remove capture files left behind only by a crash or forced termination."""
+
+    root = temp_dir or Path(tempfile.gettempdir())
+    cutoff = (time.time() if now is None else now) - BLENDY_CAPTURE_TEMP_MAX_AGE_SECONDS
+    removed = 0
+    for pattern in ("local_ai_chat_*.png", "local_ai_chat_area_*.png"):
+        for candidate in root.glob(pattern):
+            try:
+                if candidate.is_file() and candidate.stat().st_mtime < cutoff:
+                    candidate.unlink()
+                    removed += 1
+            except OSError:
+                continue
+    return removed
 
 
 def _validated_bridge_content_length(raw_length: str) -> int:
@@ -202,8 +225,8 @@ def _bridge_context_selection(prompt: str, requested_tier: str = "") -> dict[str
         tier = "focused"
         reason = "prompt requested specific Blender evidence"
     else:
-        tier = "compact"
-        reason = "compact live facts are sufficient"
+        tier = "focused"
+        reason = "default tutor context includes nearby scene relationships"
 
     if tier == "expanded":
         sections = {key: True for key in sections}
@@ -596,10 +619,10 @@ if bpy is not None:
         )
         screenshot_max_px: IntProperty(
             name="Image Max",
-            default=800,
+            default=BLENDY_DESKTOP_OVERVIEW_MAX_PX,
             min=256,
             soft_min=512,
-            soft_max=1600,
+            soft_max=2048,
             description="Maximum screenshot width or height before it is sent to the local model",
         )
         context_limit_tokens: IntProperty(
@@ -723,6 +746,7 @@ if bpy is not None:
     def _modifier_summary(modifier: Any) -> str:
         fields = []
         for name in (
+            "operation",
             "levels",
             "render_levels",
             "width",
@@ -732,11 +756,33 @@ if bpy is not None:
             "offset",
             "count",
             "segments",
+            "fit_type",
+            "deform_axis",
+            "wrap_method",
+            "use_axis_x",
+            "use_axis_y",
+            "use_axis_z",
         ):
             if hasattr(modifier, name):
                 value = getattr(modifier, name)
                 if isinstance(value, (int, float, bool, str)):
                     fields.append(f"{name}={value}")
+        for name in (
+            "object",
+            "mirror_object",
+            "offset_object",
+            "curve",
+            "target",
+            "origin",
+            "start_cap",
+            "end_cap",
+            "auxiliary_target",
+            "texture_coords_object",
+        ):
+            target = getattr(modifier, name, None)
+            target_name = getattr(target, "name", "") if target is not None else ""
+            if target_name:
+                fields.append(f"{name}={target_name}")
         field_text = ", ".join(fields)
         suffix = f" ({field_text})" if field_text else ""
         visible = "on" if modifier.show_viewport else "off"
@@ -1299,17 +1345,88 @@ if bpy is not None:
         return text[: max(0, limit - len(marker))].rstrip() + marker
 
 
+    def _authoritative_ui_state(context: Any) -> dict[str, Any]:
+        tool_settings = context.scene.tool_settings
+        mesh_select_flags = tuple(getattr(tool_settings, "mesh_select_mode", (False, False, False)))
+        mesh_select_mode = [
+            label
+            for label, enabled in zip(("VERTEX", "EDGE", "FACE"), mesh_select_flags)
+            if enabled
+        ]
+        snap_elements = sorted(str(item) for item in getattr(tool_settings, "snap_elements", set()))
+        orientation = "Unknown"
+        try:
+            orientation = str(context.scene.transform_orientation_slots[0].type)
+        except Exception:
+            pass
+        viewport_state = {
+            "shading": "Unknown",
+            "overlays": None,
+            "xray": None,
+            "localView": None,
+        }
+        candidates = []
+        for window in _ordered_blender_windows(context):
+            for area in getattr(window.screen, "areas", []):
+                if getattr(area, "type", "") == "VIEW_3D":
+                    candidates.append((int(area.width) * int(area.height), area))
+        if candidates:
+            _size, area = max(candidates, key=lambda item: item[0])
+            space = getattr(getattr(area, "spaces", None), "active", None)
+            overlay = getattr(space, "overlay", None)
+            shading = getattr(space, "shading", None)
+            viewport_state = {
+                "shading": str(getattr(shading, "type", "Unknown")),
+                "overlays": getattr(overlay, "show_overlays", None),
+                "xray": getattr(shading, "show_xray", None),
+                "localView": bool(getattr(space, "local_view", None)),
+            }
+        return {
+            "mode": context.mode,
+            "workspace": context.workspace.name if context.workspace else "Unknown",
+            "activeObject": context.active_object.name if context.active_object else "",
+            "activeObjectType": context.active_object.type if context.active_object else "",
+            "selectedObjects": [obj.name for obj in context.selected_objects][:24],
+            "activeTool": _active_tool_summary(context),
+            "meshSelectionMode": mesh_select_mode,
+            "snapEnabled": bool(getattr(tool_settings, "use_snap", False)),
+            "snapElements": snap_elements,
+            "proportionalEditing": bool(
+                getattr(tool_settings, "use_proportional_edit", False)
+                or getattr(tool_settings, "use_proportional_edit_objects", False)
+            ),
+            "pivotPoint": str(getattr(tool_settings, "transform_pivot_point", "Unknown")),
+            "transformOrientation": orientation,
+            "viewport": viewport_state,
+            "frame": context.scene.frame_current,
+            "blenderVersion": bpy.app.version_string,
+        }
+
+
     def _build_bridge_runtime_facts(context: Any, selection: dict[str, Any]) -> str:
         active = context.active_object
+        state = _authoritative_ui_state(context)
         lines = [
-            "Live Blender runtime facts (read-only):",
+            "Authoritative Blender runtime state (read-only; exact state beats screenshot inference):",
             f"Blender version: {bpy.app.version_string}",
             f"Blender Python API version: {'.'.join(str(part) for part in bpy.app.version)}",
-            f"Current mode: {context.mode}",
-            f"Workspace: {context.workspace.name if context.workspace else 'unknown'}",
+            f"Current mode: {state['mode']}",
+            f"Workspace: {state['workspace']}",
             f"Scene: {context.scene.name}",
-            _active_tool_summary(context),
+            state["activeTool"],
             f"Active object type: {active.type if active else 'none'}",
+            "Mesh selection mode: " + (", ".join(state["meshSelectionMode"]) or "not applicable"),
+            f"Snapping: {'on' if state['snapEnabled'] else 'off'}; elements={', '.join(state['snapElements']) or 'none'}",
+            f"Proportional editing: {'on' if state['proportionalEditing'] else 'off'}",
+            f"Pivot point: {state['pivotPoint']}",
+            f"Transform orientation: {state['transformOrientation']}",
+            (
+                "Largest 3D View: "
+                f"shading={state['viewport']['shading']}, "
+                f"overlays={state['viewport']['overlays']}, "
+                f"xray={state['viewport']['xray']}, "
+                f"local_view={state['viewport']['localView']}"
+            ),
         ]
         if selection["sections"].get("keymap"):
             keymap_limit = 18 if selection["tier"] == "expanded" else 10
@@ -1355,6 +1472,17 @@ if bpy is not None:
                     f"Dimensions: {_safe_float_tuple(active.dimensions)}",
                 ]
             )
+            if active.parent is not None:
+                lines.append(f"Parent: {active.parent.name} ({active.parent.type})")
+            constraints = list(getattr(active, "constraints", []))
+            if constraints:
+                lines.append("Constraints:")
+                for constraint in constraints[:10]:
+                    target = getattr(constraint, "target", None)
+                    target_text = f", target={target.name}" if target is not None else ""
+                    lines.append(
+                        f"- {constraint.name}: {constraint.type}, influence={getattr(constraint, 'influence', 1.0)}{target_text}"
+                    )
             if active.type == "MESH" and active.data:
                 mesh = active.data
                 lines.extend(
@@ -1378,6 +1506,52 @@ if bpy is not None:
                 lines.append("- none")
             if tier == "expanded":
                 lines.append(f"World bounding box corners: {_world_bounding_box(active)}")
+
+        visible_objects = []
+        for obj in objects:
+            try:
+                if obj.visible_get():
+                    visible_objects.append(obj)
+            except Exception:
+                continue
+        if active is not None:
+            try:
+                active_position = active.matrix_world.translation
+                nearby = sorted(
+                    (obj for obj in visible_objects if obj is not active),
+                    key=lambda obj: float((obj.matrix_world.translation - active_position).length),
+                )
+            except Exception:
+                nearby = [obj for obj in visible_objects if obj is not active]
+            nearby_limit = 8 if tier == "compact" else 14 if tier == "focused" else 24
+            lines.extend(["", f"Nearby visible objects (closest {nearby_limit}):"])
+            if nearby:
+                for obj in nearby[:nearby_limit]:
+                    try:
+                        distance = float((obj.matrix_world.translation - active.matrix_world.translation).length)
+                        distance_text = f"{distance:.4g}"
+                    except Exception:
+                        distance_text = "unknown"
+                    selected_marker = "selected" if obj in context.selected_objects else "not selected"
+                    parent_text = f", parent={obj.parent.name}" if obj.parent is not None else ""
+                    lines.append(
+                        f"- {obj.name}: type={obj.type}, distance={distance_text}, "
+                        f"dimensions={_safe_float_tuple(obj.dimensions)}, {selected_marker}{parent_text}"
+                    )
+            else:
+                lines.append("- none")
+        elif visible_objects:
+            anchor_limit = 8 if tier == "compact" else 14
+            anchors = sorted(
+                visible_objects,
+                key=lambda obj: float(abs(obj.dimensions.x * obj.dimensions.y * obj.dimensions.z)),
+                reverse=True,
+            )
+            lines.extend(["", f"Visible scene anchors (largest {anchor_limit}):"])
+            for obj in anchors[:anchor_limit]:
+                lines.append(
+                    f"- {obj.name}: type={obj.type}, dimensions={_safe_float_tuple(obj.dimensions)}"
+                )
 
         visible = _visible_editor_context(context)
         if visible:
@@ -1617,13 +1791,26 @@ if bpy is not None:
                 bpy.data.images.remove(image)
 
 
-    def _capture_screenshot_data_url(max_px: int = 800, with_kind: bool = False) -> Any:
+    def _ordered_blender_windows(context: Any | None = None) -> list[Any]:
+        windows = list(bpy.context.window_manager.windows)
+        preferred = getattr(context or bpy.context, "window", None)
+        if preferred in windows:
+            windows.remove(preferred)
+            windows.insert(0, preferred)
+        return windows
+
+
+    def _capture_screenshot_data_url(
+        max_px: int = BLENDY_DESKTOP_OVERVIEW_MAX_PX,
+        with_kind: bool = False,
+        context: Any | None = None,
+    ) -> Any:
         handle, path = tempfile.mkstemp(prefix="local_ai_chat_", suffix=".png")
         os.close(handle)
         try:
             captured = False
             capture_kind = "overview"
-            for window in bpy.context.window_manager.windows:
+            for window in _ordered_blender_windows(context):
                 screen = window.screen
                 try:
                     with bpy.context.temp_override(window=window, screen=screen):
@@ -1636,7 +1823,7 @@ if bpy is not None:
                 except Exception:
                     continue
             if not captured:
-                for window in bpy.context.window_manager.windows:
+                for window in _ordered_blender_windows(context):
                     screen = window.screen
                     for area in screen.areas:
                         if area.type != "VIEW_3D":
@@ -1852,26 +2039,38 @@ if bpy is not None:
         visual_evidence: list[dict[str, str]] = []
         if _bridge_should_capture_screenshot(request):
             try:
+                overview_max_px = max(
+                    BLENDY_DESKTOP_OVERVIEW_MAX_PX,
+                    int(getattr(props, "screenshot_max_px", BLENDY_DESKTOP_OVERVIEW_MAX_PX) or 0),
+                )
                 screenshot, screenshot_kind = _capture_screenshot_data_url(
-                    props.screenshot_max_px,
+                    overview_max_px,
                     with_kind=True,
+                    context=context,
                 )
                 visual_evidence.append(
                     {
                         "kind": screenshot_kind,
                         "label": (
-                            "Blender window overview"
+                            "Full active Blender window"
                             if screenshot_kind == "overview"
-                            else "Focused Blender editor (overview capture was unavailable)"
+                            else "Focused Blender editor (full-window capture was unavailable)"
                         ),
                         "editorType": "SCREEN" if screenshot_kind == "overview" else "VIEW_3D",
                         "dataUrl": screenshot,
+                        "capturedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        "maxEdge": str(overview_max_px),
+                        "byteCount": str(len(screenshot.encode("utf-8"))),
                     }
                 )
                 if screenshot_kind == "overview":
                     try:
+                        focused_max_px = max(
+                            BLENDY_DESKTOP_FOCUSED_MAX_PX,
+                            int(getattr(props, "screenshot_max_px", BLENDY_DESKTOP_FOCUSED_MAX_PX) or 0),
+                        )
                         active_data_url, editor_type = _capture_active_area_data_url(
-                            props.screenshot_max_px,
+                            focused_max_px,
                             selection,
                         )
                         visual_evidence.append(
@@ -1880,6 +2079,9 @@ if bpy is not None:
                                 "label": f"Focused {editor_type.replace('_', ' ').title()} evidence",
                                 "editorType": editor_type,
                                 "dataUrl": active_data_url,
+                                "capturedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                "maxEdge": str(focused_max_px),
+                                "byteCount": str(len(active_data_url.encode("utf-8"))),
                             }
                         )
                     except Exception as exc:
@@ -1890,9 +2092,13 @@ if bpy is not None:
         visual_evidence, omitted_visual_count = _bounded_visual_evidence(visual_evidence)
         if omitted_visual_count:
             active_area_error = (
-                f"{omitted_visual_count} capture was omitted to keep the local bridge response bounded"
+                f"{omitted_visual_count} optional focused capture was omitted to keep the local bridge response bounded"
             )
-        screenshot = visual_evidence[0]["dataUrl"] if visual_evidence else ""
+        overview_evidence = next(
+            (item for item in visual_evidence if item.get("kind") == "overview"),
+            None,
+        )
+        screenshot = str((overview_evidence or visual_evidence[0]).get("dataUrl", "")) if visual_evidence else ""
 
         project = _bridge_project_payload(context)
         context_line = _bridge_context_line(context, bool(screenshot))
@@ -1930,11 +2136,13 @@ if bpy is not None:
             "contextLine": context_line,
             "selected": {
                 "object": active.name if active else "None",
+                "objectType": active.type if active else "None",
                 "mode": context.mode.replace("_", " ").title(),
                 "units": _scene_unit_label(context.scene),
                 "dimensions": _number_triplet(active.dimensions) if active else "None",
                 "scale": _number_triplet(active.scale, separator=", ") if active else "None",
             },
+            "runtimeState": _authoritative_ui_state(context),
             "modifiers": _modifier_payloads(active),
             "scene": {
                 "name": context.scene.name,
@@ -1944,9 +2152,11 @@ if bpy is not None:
             "visual": visual,
             "used": {
                 "screenshot": bool(visual_evidence),
-            "screenshotOverview": any(item["kind"] == "overview" for item in visual_evidence),
+                "screenshotOverview": any(item["kind"] == "overview" for item in visual_evidence),
                 "activeEditorScreenshot": any(item["kind"] == "active_editor" for item in visual_evidence),
                 "screenshotReason": request["screenshot"],
+                "screenshotError": screenshot_error,
+                "focusedCaptureError": active_area_error,
                 "contextTier": tier,
                 "knowledgeMode": "desktop_managed",
             },
@@ -2009,7 +2219,7 @@ if bpy is not None:
 
 
     class _BlendyBridgeHandler(BaseHTTPRequestHandler):
-        server_version = "BlendyBridge/2.0.1"
+        server_version = "BlendyBridge/2.1.0"
 
         def log_message(self, format: str, *args: Any) -> None:
             return None
@@ -2760,6 +2970,7 @@ if bpy is not None:
 
     def register() -> None:
         global _TIMER_ACTIVE
+        _cleanup_stale_capture_files()
         for cls in classes:
             bpy.utils.register_class(cls)
         bpy.types.Scene.local_ai_chat = bpy.props.PointerProperty(type=LOCALAI_Properties)

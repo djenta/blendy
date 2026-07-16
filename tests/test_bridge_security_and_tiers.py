@@ -1,14 +1,19 @@
+import os
+import tempfile
 import unittest
 from pathlib import Path
 
 from local_ai_chat import (
     BLENDY_BRIDGE_MAX_REQUEST_BYTES,
     BLENDY_BRIDGE_MAX_PROMPT_CHARS,
+    BLENDY_CAPTURE_TEMP_MAX_AGE_SECONDS,
+    BLENDY_DESKTOP_OVERVIEW_MAX_PX,
     _bounded_visual_evidence,
     _bridge_context_selection,
     _bridge_origin_allowed,
     _bridge_request_token,
     _bridge_token_matches,
+    _cleanup_stale_capture_files,
     _sanitize_bridge_request_payload,
     _validated_bridge_content_length,
 )
@@ -52,20 +57,45 @@ class BridgeSecurityTests(unittest.TestCase):
         with self.assertRaises(OverflowError):
             _validated_bridge_content_length(str(BLENDY_BRIDGE_MAX_REQUEST_BYTES + 1))
 
-    def test_visual_evidence_keeps_focused_capture_before_overview(self) -> None:
+    def test_visual_evidence_keeps_overview_before_optional_focused_capture(self) -> None:
         evidence = [
-            {"kind": "overview", "dataUrl": "a" * 8},
             {"kind": "active_editor", "dataUrl": "b" * 8},
+            {"kind": "overview", "dataUrl": "a" * 8},
         ]
         kept, omitted = _bounded_visual_evidence(evidence, max_bytes=10)
-        self.assertEqual([item["kind"] for item in kept], ["active_editor"])
+        self.assertEqual([item["kind"] for item in kept], ["overview"])
         self.assertEqual(omitted, 1)
+
+    def test_stale_capture_cleanup_only_removes_old_blendy_pngs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_root:
+            root = Path(temp_root)
+            stale_overview = root / "local_ai_chat_old.png"
+            stale_area = root / "local_ai_chat_area_old.png"
+            fresh_overview = root / "local_ai_chat_fresh.png"
+            unrelated = root / "other_capture.png"
+            for candidate in (stale_overview, stale_area, fresh_overview, unrelated):
+                candidate.write_bytes(b"test")
+
+            now = 2_000_000.0
+            stale_time = now - BLENDY_CAPTURE_TEMP_MAX_AGE_SECONDS - 1
+            os.utime(stale_overview, (stale_time, stale_time))
+            os.utime(stale_area, (stale_time, stale_time))
+            os.utime(fresh_overview, (now, now))
+            os.utime(unrelated, (stale_time, stale_time))
+
+            removed = _cleanup_stale_capture_files(root, now=now)
+
+            self.assertEqual(removed, 2)
+            self.assertFalse(stale_overview.exists())
+            self.assertFalse(stale_area.exists())
+            self.assertTrue(fresh_overview.exists())
+            self.assertTrue(unrelated.exists())
 
 
 class BridgeContextTierTests(unittest.TestCase):
-    def test_default_context_is_compact(self) -> None:
+    def test_default_tutor_context_is_focused_without_unrelated_sections(self) -> None:
         selection = _bridge_context_selection("What should I do next?")
-        self.assertEqual(selection["tier"], "compact")
+        self.assertEqual(selection["tier"], "focused")
         self.assertFalse(any(selection["sections"].values()))
 
     def test_prompt_expands_only_relevant_evidence(self) -> None:
@@ -126,6 +156,20 @@ class BridgeSourceBoundaryTests(unittest.TestCase):
         self.assertNotIn('"screenshotDataUrl"', bridge)
         self.assertNotIn('"context_text"', bridge)
 
+    def test_desktop_overview_has_a_1440px_floor_and_is_selected_as_primary_evidence(self) -> None:
+        self.assertEqual(BLENDY_DESKTOP_OVERVIEW_MAX_PX, 1440)
+        capture = self.source[
+            self.source.index("def _capture_screenshot_data_url") : self.source.index("def _capture_active_area_data_url")
+        ]
+        bridge = self.source[
+            self.source.index("def _build_bridge_context_payload") : self.source.index("def _submit_bridge_job")
+        ]
+        self.assertIn("max_px: int = BLENDY_DESKTOP_OVERVIEW_MAX_PX", capture)
+        self.assertIn("overview_max_px = max(", bridge)
+        self.assertIn("BLENDY_DESKTOP_OVERVIEW_MAX_PX", bridge)
+        self.assertIn("overview_evidence = next(", bridge)
+        self.assertIn('(item for item in visual_evidence if item.get("kind") == "overview")', bridge)
+
     def test_bridge_queue_is_bounded_and_expired_jobs_are_cancelled(self) -> None:
         self.assertIn('queue.Queue(maxsize=2)', self.source)
         processor = self.source[
@@ -135,6 +179,20 @@ class BridgeSourceBoundaryTests(unittest.TestCase):
         self.assertIn("BLENDY_BRIDGE_MAX_JOBS_PER_TICK", processor)
         self.assertIn('job["cancelled"] = True', processor)
         self.assertIn('job.get("deadline"', processor)
+
+    def test_bridge_persists_only_scene_snapshot_text_not_image_bytes(self) -> None:
+        processor = self.source[
+            self.source.index("def _submit_bridge_job") : self.source.index("class _BlendyBridgeHandler")
+        ]
+        discovery = self.source[
+            self.source.index("def _write_bridge_discovery") : self.source.index("def _clear_bridge_discovery")
+        ]
+        self.assertIn('result.pop("_sceneSnapshot"', processor)
+        self.assertIn("last_scene_snapshot = snapshot", processor)
+        self.assertNotIn("dataUrl", processor)
+        self.assertNotIn("visualEvidence", processor)
+        self.assertNotIn("dataUrl", discovery)
+        self.assertNotIn("visualEvidence", discovery)
 
     def test_discovery_is_readvertised_without_plaintext_project_path(self) -> None:
         discovery = self.source[
