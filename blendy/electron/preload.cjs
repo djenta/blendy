@@ -5,6 +5,13 @@ contextBridge.exposeInMainWorld("blendyWindow", {
   setPinned: (pinned) => ipcRenderer.invoke("window:set-pinned", pinned),
   minimize: () => ipcRenderer.invoke("window:minimize"),
   close: () => ipcRenderer.invoke("window:close"),
+  confirmClose: () => ipcRenderer.invoke("window:confirm-close"),
+  cancelClose: () => ipcRenderer.invoke("window:cancel-close"),
+  onCloseRequested: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on("window:close-requested", listener);
+    return () => ipcRenderer.removeListener("window:close-requested", listener);
+  },
 });
 
 contextBridge.exposeInMainWorld("blendyApp", {

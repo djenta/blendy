@@ -6,6 +6,9 @@ interface Window {
     setPinned: (pinned: boolean) => Promise<boolean>;
     minimize: () => Promise<void>;
     close: () => Promise<void>;
+    confirmClose: () => Promise<void>;
+    cancelClose: () => Promise<void>;
+    onCloseRequested: (callback: () => void) => () => void;
   };
   blendyApp?: {
     getState: () => Promise<import("./types").BackendState>;
@@ -18,7 +21,7 @@ interface Window {
       prompt: string;
       backendSettings?: Partial<import("./types").BackendSettings>;
       chatId?: string;
-      referenceImages?: string[];
+      referenceImages?: import("./types").ReferenceImagePayload[];
     }) => Promise<import("./types").SendMessageResult>;
     getModelStatus?: () => Promise<import("./types").ModelStatus>;
     cancelMessage?: (request: { messageId: string }) => Promise<{ ok?: boolean; messageId?: string }>;
@@ -30,6 +33,7 @@ interface Window {
     regenerateLast: (request: {
       backendSettings?: Partial<import("./types").BackendSettings>;
       chatId?: string;
+      referenceImages?: import("./types").ReferenceImagePayload[];
     }) => Promise<import("./types").SendMessageResult>;
     compactChat: (request: {
       backendSettings?: Partial<import("./types").BackendSettings>;

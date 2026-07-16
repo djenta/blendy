@@ -4,6 +4,7 @@ export type ThemeColors = Record<ThemeColorRole, string>;
 export type PageName = "chat" | "settings";
 export type KnowledgeMode = "LOCAL_AUTO_WEB" | "LOCAL_ONLY" | "ASK_BEFORE_WEB";
 export type ToolUseMode = "AUTO" | "OFF";
+export type EvidenceCaptureState = "idle" | "capturing" | "delivered" | "facts-only" | "failed";
 
 export interface ModelStatus {
   reachable: boolean;
@@ -25,6 +26,11 @@ export interface ProjectNotebook {
   sceneMismatch?: boolean;
   currentScenePath?: string;
   currentSceneName?: string;
+}
+
+export interface ReferenceImagePayload {
+  dataUrl: string;
+  name: string;
 }
 
 export interface ToolTraceEntry {
@@ -79,6 +85,11 @@ export interface AssistantReceipt {
   summary?: string;
   usedScreenshot?: boolean;
   usedScene?: boolean;
+  referenceImages?: Array<{
+    name?: string;
+    used?: boolean;
+  }>;
+  referenceCount?: number;
   safety?: string;
   finishReason?: string;
   toolTrace?: ToolTraceEntry[];
@@ -167,8 +178,34 @@ export interface ContextSnapshot {
   contextLimitTokens?: number;
   contextPercent?: number;
   contextStatus?: "OK" | "WARN" | "DANGER";
+  configuredLimitTokens?: number;
+  configuredContextLimitTokens?: number;
+  modelContextTokens?: number;
+  modelContextLength?: number;
+  answerReserveTokens?: number;
+  responseReserveTokens?: number;
+  effectiveInputLimitTokens?: number;
+  currentRequestTokens?: number;
+  percent?: number;
+  status?: "OK" | "WARN" | "DANGER";
+  storedHistoryTokens?: number;
+  storedConversationTokens?: number;
+  summarizedMessageCount?: number;
+  storedMessageCount?: number;
+  imageCount?: number;
+  lastActualPromptTokens?: number;
+  lastActualCompletionTokens?: number;
+  lastActualTotalTokens?: number;
+  lastActualMeasuredAt?: string;
+  lastActualReported?: boolean;
+  lastActualRequestCount?: number;
+  lastLiveStateCorrection?: boolean;
   contextLine?: string;
   usedScreenshot?: boolean;
+  screenshotCaptured?: boolean;
+  screenshotDeliveredToModel?: boolean;
+  screenshotOverviewCaptured?: boolean;
+  modelVision?: boolean | null;
   promptPacketPath?: string;
   knowledgeMode?: KnowledgeMode | string;
   knowledgeModeLabel?: string;

@@ -4,28 +4,30 @@ import {
   CircleAlert,
   HelpCircle,
   Image as ImageIcon,
+  LoaderCircle,
   MapPin,
+  Monitor,
   Paperclip,
   Save,
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { ProjectNotebook } from "./types";
+import type { EvidenceCaptureState, ProjectNotebook, ReferenceImagePayload } from "./types";
 
-export interface ReferenceImage {
+export interface ReferenceImage extends ReferenceImagePayload {
   id: string;
-  name: string;
-  dataUrl: string;
 }
 
 export function SceneMismatchBanner({
   notebook,
   onKeep,
   onNewChat,
+  disabled = false,
 }: {
   notebook?: ProjectNotebook;
   onKeep: () => void;
   onNewChat: () => void;
+  disabled?: boolean;
 }) {
   if (!notebook?.sceneMismatch) return null;
   const previous = notebook.lastSceneName || "the previous Blender file";
@@ -38,8 +40,8 @@ export function SceneMismatchBanner({
         <p>Blender now shows {current}. Keep this chat if it is the same project, or start clean.</p>
       </div>
       <div className="scene-mismatch-actions">
-        <button type="button" onClick={onKeep}>Keep chat</button>
-        <button type="button" className="primary-compact" onClick={onNewChat}>New chat</button>
+        <button type="button" onClick={onKeep} disabled={disabled}>Keep chat</button>
+        <button type="button" className="primary-compact" onClick={onNewChat} disabled={disabled}>New chat</button>
       </div>
     </section>
   );
@@ -82,6 +84,67 @@ export function CurrentCheckpoint({
           <MapPin size={14} /> Where
         </button>
       </div>
+  );
+}
+
+export function EvidenceStrip({
+  bridgeOk,
+  captureState,
+  isGenerating,
+  visionStatus,
+  referenceCount,
+  preparingReferences,
+}: {
+  bridgeOk?: boolean;
+  captureState: EvidenceCaptureState;
+  isGenerating: boolean;
+  visionStatus?: boolean | null;
+  referenceCount: number;
+  preparingReferences: boolean;
+}) {
+  const screenLabel = captureState === "capturing"
+    ? "Capturing full Blender screen"
+    : bridgeOk === false || captureState === "failed"
+      ? "Fresh Blender screen unavailable"
+      : captureState === "facts-only"
+        ? "Screen captured; model gets facts only"
+        : captureState === "delivered"
+          ? isGenerating ? "Fresh full screen attached" : "Last answer used a fresh full screen"
+          : visionStatus === false
+            ? "Scene facts only"
+            : bridgeOk === undefined
+              ? "Checking Blender evidence"
+              : "Full screen requested on send";
+  const screenTone = captureState === "capturing" || bridgeOk === undefined
+    ? "working"
+    : bridgeOk === false || captureState === "failed" || captureState === "facts-only" || visionStatus === false
+      ? "warning"
+      : "ready";
+  const visionLabel = visionStatus === true
+    ? "Vision model ready"
+    : visionStatus === false
+      ? "Model cannot view images"
+      : "Vision support unconfirmed";
+
+  return (
+    <div className="evidence-strip" role="status" aria-live="polite" aria-label="Evidence prepared for Blendy">
+      <span className={`evidence-chip ${screenTone}`} title="Blendy requests a fresh full-window Blender capture with each message.">
+        {captureState === "capturing" ? <LoaderCircle className="spin" size={13} /> : <Monitor size={13} />} {screenLabel}
+      </span>
+      <span className={`evidence-chip ${visionStatus === false ? "warning" : "neutral"}`}>
+        <ImageIcon size={13} /> {visionLabel}
+      </span>
+      {(referenceCount > 0 || preparingReferences) && (
+        <span className={`evidence-chip ${preparingReferences ? "working" : visionStatus === false ? "warning" : "neutral"}`}>
+          {preparingReferences ? <LoaderCircle className="spin" size={13} /> : <Paperclip size={13} />}
+          {preparingReferences
+            ? "Preparing reference"
+            : visionStatus === false
+              ? `${referenceCount} reference${referenceCount === 1 ? "" : "s"} paused`
+              : `${referenceCount} named reference${referenceCount === 1 ? "" : "s"} attached`}
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -133,6 +196,9 @@ export function ReferenceAttachmentTray({
   onChoose,
   onRemove,
   actions,
+  preparing,
+  isGenerating,
+  referencesPaused,
 }: {
   images: ReferenceImage[];
   error: string;
@@ -140,6 +206,9 @@ export function ReferenceAttachmentTray({
   onChoose: (files: FileList) => void;
   onRemove: (id: string) => void;
   actions?: React.ReactNode;
+  preparing: boolean;
+  isGenerating: boolean;
+  referencesPaused: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   return (
@@ -161,16 +230,18 @@ export function ReferenceAttachmentTray({
         <button
           type="button"
           className="attach-reference"
-          disabled={!supportsVision || images.length >= 2}
+          disabled={!supportsVision || images.length >= 2 || preparing}
           onClick={() => inputRef.current?.click()}
-          title={supportsVision ? "Attach up to two desktop photos. Blendy prepares them for LM Studio." : "Load a vision-capable model to attach images"}
+          title={supportsVision ? "Attach up to two named desktop photos. Blendy prepares them for local LM Studio." : "Load a vision-capable model to attach images"}
+          aria-busy={preparing}
         >
-          <Paperclip size={16} />
-          <span>{images.length ? `${images.length} reference${images.length > 1 ? "s" : ""}` : "Add reference"}</span>
+          {preparing ? <LoaderCircle className="spin" size={16} /> : <Paperclip size={16} />}
+          <span>{preparing ? "Preparing" : images.length ? `${images.length} reference${images.length > 1 ? "s" : ""}` : "Add reference"}</span>
         </button>
         {actions}
-        {images.length > 0 && <small>Images go to the selected LM Studio model for this turn and are not saved in chat.</small>}
-        {!supportsVision && <small>The loaded model cannot read images.</small>}
+        {images.length > 0 && referencesPaused && <small>References are still attached, but this model cannot view them. They will be skipped until a vision model is loaded.</small>}
+        {images.length > 0 && !referencesPaused && <small>{isGenerating ? "References stay attached for later turns; additions made during this answer begin with your next message." : "Named references stay attached for later turns until removed or you change chats. They are not written into chat history."}</small>}
+        {!supportsVision && images.length === 0 && <small>The loaded model cannot read images.</small>}
       </div>
       <input
         ref={inputRef}
