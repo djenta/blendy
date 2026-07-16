@@ -8,7 +8,7 @@ const repoRoot = path.resolve(__dirname, "..");
 const backendPath = path.join(repoRoot, "blendy", "electron", "backend.cjs");
 const backendSource =
   fs.readFileSync(backendPath, "utf8") +
-  "\nmodule.exports.__test__ = { writePromptPacket, sanitizePromptPacketMessages, cleanModelText, buildChatPayload, buildContextText, estimateContextUsage, contextToSnapshot, runLmStudioCompletionWithTools, assistantContextLine, assistantReceipt, assistantReceiptFromTools, resolveWebApproval, pendingWebLookupPrompt, shouldSendScreenshot, settingsWithModelBudget, pruneChatForRegeneration, sanitizeReferenceImages, toolDefinitionsForPolicy, toolDefinitionsForTurn, toolNamesForTurn, isPrivateIp, modelCapabilityStatus, applyModelAdapter, normalizeLoopbackHttpUrl, assertRequiredBlenderOverview, contextForModelVision, referenceImageDescriptors, visualEvidenceDescriptors, samplingProfileForTurn, compactChatToSummary, detectAuthoritativeModeContradiction, normalizedLmUsage, mergeLmUsage, persistedLmUsage };\n";
+  "\nmodule.exports.__test__ = { writePromptPacket, sanitizePromptPacketMessages, cleanModelText, buildChatPayload, buildContextText, estimateContextUsage, contextToSnapshot, runLmStudioCompletionWithTools, assistantContextLine, assistantReceipt, assistantReceiptFromTools, resolveWebApproval, pendingWebLookupPrompt, shouldSendScreenshot, settingsWithModelBudget, pruneChatForRegeneration, sanitizeReferenceImages, toolDefinitionsForPolicy, toolDefinitionsForTurn, toolNamesForTurn, isPrivateIp, modelCapabilityStatus, applyModelAdapter, normalizeLoopbackHttpUrl, assertRequiredBlenderOverview, contextForModelVision, referenceImageDescriptors, visualEvidenceDescriptors, samplingProfileForTurn, compactChatToSummary, detectAuthoritativeModeContradiction, normalizedLmUsage, mergeLmUsage, persistedLmUsage, isCorrectionPrompt, markRejectedAssistantGuidance, reconcileRejectedAssistantGuidance, maybeSetGoalAnchor, isNewProjectPlanningTurn };\n";
 
 const sandbox = {
   require,
@@ -59,6 +59,11 @@ const {
   normalizedLmUsage,
   mergeLmUsage,
   persistedLmUsage,
+  isCorrectionPrompt,
+  markRejectedAssistantGuidance,
+  reconcileRejectedAssistantGuidance,
+  maybeSetGoalAnchor,
+  isNewProjectPlanningTurn,
 } = sandbox.module.exports.__test__;
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "blendy-packet-"));
@@ -216,6 +221,53 @@ assert(!Object.prototype.hasOwnProperty.call(ordinaryPayload, "tool_choice"));
 assert.strictEqual(ordinaryPayload.temperature, 0.55);
 assert.strictEqual(ordinaryPayload.top_p, 0.92);
 assert.strictEqual(ordinaryPayload.top_k, 48);
+assert(ordinaryPayload.messages[0].content.includes("untouched default Cube as disposable scene context"));
+assert(!ordinaryPayload.messages[0].content.toLowerCase().includes("pineapple grenade"));
+
+const genericNewProjectPrompt = "I am starting a new Blender project. Help me plan it, then give me only the first checkpoint: Retro alarm clock";
+const genericNewProjectChat = {
+  compactedSummary: "",
+  compactedMessageCount: 0,
+  projectNotebook: "A small bedside alarm clock with readable proportions.",
+  goalAnchor: "",
+  messages: [],
+};
+maybeSetGoalAnchor(genericNewProjectChat, genericNewProjectPrompt);
+assert.strictEqual(genericNewProjectChat.goalAnchor, "Retro alarm clock");
+assert.strictEqual(isNewProjectPlanningTurn(genericNewProjectPrompt, genericNewProjectChat), true);
+const genericNewProjectPayload = buildChatPayload({
+  prompt: genericNewProjectPrompt,
+  context: liveContext,
+  chat: genericNewProjectChat,
+  settings: { model: "gemma-test", responseMaxTokens: 3200, toolUse: "AUTO", knowledgeMode: "LOCAL_ONLY" },
+});
+const genericNewProjectText = genericNewProjectPayload.messages.at(-1).content.at(-1).text;
+assert(genericNewProjectText.includes("NEW PROJECT BASE-FORM DECISION"));
+assert(genericNewProjectText.includes("Choose the base primitive from the target's main silhouette and topology"));
+assert(genericNewProjectText.includes("Project goal anchor: Retro alarm clock"));
+
+assert.strictEqual(isCorrectionPrompt("why the fuck wouldnt you just tell me the direct way"), true);
+assert.strictEqual(isCorrectionPrompt("bro, it is not supposed to look like this if I did exactly what you said"), true);
+assert.strictEqual(isCorrectionPrompt("no, look at it"), true);
+assert.strictEqual(isCorrectionPrompt("It doesn't work, and I followed what you said."), true);
+assert.strictEqual(isCorrectionPrompt("Look at it and tell me whether the bevel is even"), false);
+assert.strictEqual(samplingProfileForTurn("why the fuck wouldnt you just tell me the direct way").profile, "exact");
+const rejectedGuidanceChat = {
+  messages: [{ role: "assistant", content: "Keep repairing the selected default object.", status: "done" }],
+};
+assert.strictEqual(markRejectedAssistantGuidance(rejectedGuidanceChat, "That is not supposed to happen; I followed your steps."), true);
+assert.strictEqual(rejectedGuidanceChat.messages[0].rejected, true);
+const historicalCorrectionChat = {
+  messages: [
+    { role: "user", content: "Help me block out a desk lamp." },
+    { role: "assistant", content: "Keep the selected object even though it fights the silhouette.", status: "done" },
+    { role: "user", content: "It doesn't work; I followed what you said." },
+    { role: "assistant", content: "Use a cleaner base form instead.", status: "done" },
+  ],
+};
+assert.strictEqual(reconcileRejectedAssistantGuidance(historicalCorrectionChat), true);
+assert.strictEqual(historicalCorrectionChat.messages[1].rejected, true);
+assert.strictEqual(historicalCorrectionChat.messages[3].rejected, undefined);
 
 const docsPayload = buildChatPayload({
   prompt: "Check the official Blender documentation for the Bevel modifier.",
@@ -280,7 +332,7 @@ const ordinaryUsage = estimateContextUsage({
   chat: bridgedChat,
   settings: { contextLimitTokens: 70000, responseMaxTokens: 3200, toolUse: "AUTO", knowledgeMode: "LOCAL_ONLY" },
 });
-assert(ordinaryUsage.toolDefinitionTokens <= 1, "An ordinary turn may account for the serialized empty tool list, but offers no tool schema.");
+assert.strictEqual(ordinaryUsage.toolDefinitionTokens, 0, "An ordinary turn with no offered tools must report zero tool-definition tokens.");
 assert.strictEqual(ordinaryUsage.toolReserveTokens, 0);
 assert.strictEqual(ordinaryUsage.imageCount, 3);
 assert(ordinaryUsage.imageReserveTokens >= 2700);

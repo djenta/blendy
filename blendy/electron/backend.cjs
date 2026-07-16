@@ -63,8 +63,11 @@ Continuity contract:
 
 Tutor behavior:
 - First understand the end goal and the current phase of the build. Do not optimize only the selected object while ignoring the visible assembly.
-- For a new project, give a very short high-level build order, then only the first manageable checkpoint.
-- For an in-progress project, give the single most useful next checkpoint that advances the end goal. Reuse, refine, duplicate, or convert existing parts before adding unnecessary objects.
+- For a new project, give a very short high-level build order, then only the first manageable checkpoint. Before that checkpoint, choose the base primitive whose silhouette and topology already most closely match the intended main form.
+- Treat Blender's untouched default Cube as disposable scene context, not progress that must be preserved. Use a sphere or icosphere for round/ovoid masses, a cylinder for radial/tubular masses, a cube for boxy masses, and a plane for flat masses unless the target clearly calls for something else.
+- Do not make the user rescue a poor starting primitive through extra loop cuts, modifiers, or topology when replacing it is faster, cleaner, and more beginner-friendly. Teaching best practice means choosing the direct correct base unless the user explicitly asks for a topology exercise.
+- For an in-progress project, give the single most useful next checkpoint that advances the end goal. Reuse, refine, duplicate, or convert existing parts only when they already suit the intended form; do not preserve an object merely because it is selected.
+- When the user says the result is wrong, compare the fresh visible result with the done-when promise from your prior instruction. If your instruction caused the mismatch, own it immediately, reject that plan, and give the simplest correct recovery. Do not ask whether to keep a clearly wrong result or add more steps to defend the failed approach.
 - For troubleshooting, diagnose the current evidence before prescribing more modeling. Check exact mode, selection, scale, visibility, modifier order/targets, topology, and scene change evidence when relevant.
 - Teach through Blender UI actions in plain English. State the mode and exact menu/tool/action when known, but do not tell the user to enter a mode they are already in.
 - Use non-destructive, beginner-safe Blender workflows by default. Explain a term briefly when it matters.
@@ -1062,6 +1065,7 @@ function estimateContextUsage({ prompt = "", context, chat, settings, extraMessa
     settings,
     projectNotebook: chat.projectNotebook || "",
     goalAnchor: chat.goalAnchor || "",
+    newProjectPlanning: isNewProjectPlanningTurn(prompt, chat),
   });
   const historyText = historyBeforeSubmittedPrompt(chat, prompt)
     .map((message) => `${message.role}: ${message.content}`)
@@ -1081,7 +1085,7 @@ function estimateContextUsage({ prompt = "", context, chat, settings, extraMessa
   const historyTokens = estimateTokens(historyText);
   const storedHistoryTokens = estimateTokens(storedHistoryText);
   const promptTokens = estimateTokens(prompt);
-  const toolDefinitionTokenCount = estimateTokens(JSON.stringify(tools));
+  const toolDefinitionTokenCount = tools.length ? estimateTokens(JSON.stringify(tools)) : 0;
   const toolReserveTokens = tools.length ? DEFAULT_TOOL_RESERVE_TOKENS : 0;
   const imageReserveTokens = imageCount ? Math.max(DEFAULT_IMAGE_RESERVE_TOKENS, imageCount * 900) : 0;
   const toolRuntimeTokens = estimateTokens(extraText);
@@ -2116,9 +2120,11 @@ function projectNotebookSnapshot(chat, context) {
 function isCorrectionPrompt(prompt) {
   const text = String(prompt || "");
   return /\b(?:you(?:['’]re| are)? wrong|you misunderstood|not what i|i (?:mean|meant)|this whole time|that is not|that's not|what (?:the fuck )?are you talking about)\b/i.test(text)
-    || /\bactually\b[\s,:-]{0,4}(?:i(?:'m| am| was| want| need| meant)|we(?:'re| are| were)|it(?:'s| is| was)|the (?:goal|project|object|part|mode)|not)\b/i.test(text);
+    || /\bactually\b[\s,:-]{0,4}(?:i(?:'m| am| was| want| need| meant)|we(?:'re| are| were)|it(?:'s| is| was)|the (?:goal|project|object|part|mode)|not)\b/i.test(text)
+    || /\b(?:not supposed to|(?:did|followed) (?:exactly )?(?:what you said|your (?:steps|instructions)|the (?:steps|instructions))|(?:that|this|it) (?:didn['’]?t|doesn['’]?t) work|still (?:wrong|not right)|(?:this|that|it) (?:isn['’]?t|doesn['’]?t look|looks?) right|you told me)\b/i.test(text)
+    || /\bwhy\s+(?:the\s+fuck\s+)?(?:wouldn['’]?t|didn['’]?t|would\s+not|did\s+not)\s+you\b/i.test(text)
+    || /\bno\b[\s,:-]{0,5}(?:look at (?:it|this)|that is not|that's not|this is not)\b/i.test(text);
 }
-
 function markRejectedAssistantGuidance(chat, prompt) {
   if (!isCorrectionPrompt(prompt)) {
     return false;
@@ -2136,23 +2142,63 @@ function markRejectedAssistantGuidance(chat, prompt) {
   return false;
 }
 
+function reconcileRejectedAssistantGuidance(chat) {
+  let changed = false;
+  const messages = chat.messages || [];
+  messages.forEach((message, index) => {
+    if (message.role !== "user" || !isCorrectionPrompt(message.content)) {
+      return;
+    }
+    for (let priorIndex = index - 1; priorIndex >= 0; priorIndex -= 1) {
+      const prior = messages[priorIndex];
+      if (prior.role === "user") {
+        break;
+      }
+      if (
+        prior.role === "assistant"
+        && !prior.rejected
+        && !["failed", "cancelled", "streaming"].includes(prior.status)
+      ) {
+        prior.rejected = true;
+        changed = true;
+        break;
+      }
+    }
+  });
+  return changed;
+}
+
 function maybeSetGoalAnchor(chat, prompt) {
   const text = String(prompt || "").trim();
   if (!text) {
     return;
   }
   const statesGoal = /\b(?:i am|i'm|today i|we are|we're)\b[\s\S]{0,80}\b(?:mak(?:e|ing)|model(?:ing)?|build(?:ing)?|creat(?:e|ing)|sculpt(?:ing)?|design(?:ing)?|recreat(?:e|ing))\b/i.test(text)
-    || /\b(?:new project|starting a project|starting over|trying to make|trying to model|switching to|changed the project|instead i(?:'m| am))\b/i.test(text);
+    || /\b(?:new project|starting\s+(?:a\s+)?(?:new\s+)?(?:blender\s+)?project|starting over|trying to make|trying to model|turn this idea into|switching to|changed the project|instead i(?:'m| am))\b/i.test(text);
   if (!statesGoal) {
     return;
   }
   const replacesPriorGoal = isCorrectionPrompt(text)
     || /\b(?:new project|starting over|switching to|changed the project|instead)\b/i.test(text);
   if (!chat.goalAnchor || replacesPriorGoal) {
-    chat.goalAnchor = text.slice(0, 1600);
+    const labeledGoal = text.match(/(?:idea|project|checkpoint)[^:\n]{0,140}:\s*([^\n]{3,400})\s*$/i);
+    chat.goalAnchor = String(labeledGoal?.[1] || text).trim().slice(0, 1600);
   }
 }
 
+function isNewProjectPlanningTurn(prompt, chat = {}) {
+  const text = String(prompt || "");
+  const explicitStart = /\b(?:new project|starting\s+(?:a\s+)?(?:new\s+)?(?:blender\s+)?project|start(?:ing)? from scratch|turn this idea into|first checkpoint)\b/i.test(text);
+  const hasTrustedAssistantHistory = (chat.messages || []).some(
+    (message) => message.role === "assistant"
+      && !message.rejected
+      && !["failed", "cancelled", "streaming"].includes(message.status)
+      && String(message.content || "").trim(),
+  );
+  const firstDeclaredBuild = !hasTrustedAssistantHistory
+    && /\b(?:trying to|want to|help me|i am|i'm|we are|we're)\b[\s\S]{0,90}\b(?:mak(?:e|ing)|model(?:ing)?|build(?:ing)?|creat(?:e|ing)|sculpt(?:ing)?|design(?:ing)?)\b/i.test(text);
+  return explicitStart || firstDeclaredBuild;
+}
 function trimHistory(messages) {
   return (messages || [])
     .filter((message) => message.role === "user" || message.role === "assistant")
@@ -2291,6 +2337,7 @@ function buildContextText(prompt, context, compactedSummary, options = {}) {
   const knowledgeMode = normalizeKnowledgeMode(options.settings?.knowledgeMode);
   const notebook = String(options.projectNotebook || "").trim().slice(0, MAX_PROJECT_NOTEBOOK_CHARS);
   const goalAnchor = String(options.goalAnchor || "").trim().slice(0, 1600);
+  const newProjectPlanning = Boolean(options.newProjectPlanning);
   const parts = context.promptParts || {};
   const liveEvidence = visualEvidenceDescriptors(context);
   const references = referenceImageDescriptors(context);
@@ -2320,6 +2367,10 @@ function buildContextText(prompt, context, compactedSummary, options = {}) {
 Project goal anchor: ${goalAnchor || "[not established]"}
 Project Notebook: ${notebook || "[empty]"}
 Summary of older confirmed context: ${compactedSummary || "[none]"}
+${newProjectPlanning ? `
+
+NEW PROJECT BASE-FORM DECISION
+The current selected object may only be Blender's disposable default. Choose the base primitive from the target's main silhouette and topology before giving the first modeling action. Do not preserve or subdivide the default Cube unless the intended main form is genuinely box-like. Prefer replacing a poor primitive over teaching extra repair steps.` : ""}
 
 HISTORY RELIABILITY
 ${correctionTurn}
@@ -2378,6 +2429,7 @@ function buildChatPayload({ prompt, context, chat, settings, includeTools = true
     settings,
     projectNotebook: chat.projectNotebook || "",
     goalAnchor: chat.goalAnchor || "",
+    newProjectPlanning: isNewProjectPlanningTurn(prompt, chat),
   });
   const liveEvidence = visualEvidenceDescriptors(context);
   const references = referenceImageDescriptors(context);
@@ -3850,6 +3902,7 @@ function registerBackendIpc({ app, ipcMain }) {
     const key = state.storageKey;
     const packetPath = promptPacketPath(userDataPath, key);
     let chat = state.chat;
+    reconcileRejectedAssistantGuidance(chat);
     const rejectedPriorGuidance = markRejectedAssistantGuidance(chat, prompt);
     maybeSetGoalAnchor(chat, prompt);
     if (!chat.lastScenePath && context.project?.path) {
@@ -3933,6 +3986,7 @@ function registerBackendIpc({ app, ipcMain }) {
     const key = state.storageKey;
     const packetPath = promptPacketPath(userDataPath, key);
     let chat = state.chat;
+    reconcileRejectedAssistantGuidance(chat);
     const { lastUser } = pruneChatForRegeneration(chat);
     if (!lastUser) {
       throw new Error("There is no user message to regenerate from.");

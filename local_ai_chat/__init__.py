@@ -26,7 +26,7 @@ from . import core
 bl_info = {
     "name": "Local AI Chat",
     "author": "Blendy contributors",
-    "version": (2, 1, 0),
+    "version": (2, 1, 1),
     "blender": (4, 0, 0),
     "location": "View3D > Sidebar > Local AI",
     "description": "Secure live-scene bridge for the Blendy desktop tutor.",
@@ -2219,7 +2219,7 @@ if bpy is not None:
 
 
     class _BlendyBridgeHandler(BaseHTTPRequestHandler):
-        server_version = "BlendyBridge/2.1.0"
+        server_version = "BlendyBridge/2.1.1"
 
         def log_message(self, format: str, *args: Any) -> None:
             return None
